@@ -14,16 +14,11 @@ const messageRoutes = require("./routes/messageRoutes");
 
 const { ensureAdmin } = require("./utils/ensureAdmin");
 
-const envPath = path.resolve(__dirname, "../.env");
-
-const result = dotenv.config({
-  path: envPath,
+// Load local .env when available.
+// On Render, environment variables are injected directly.
+dotenv.config({
+  path: path.resolve(__dirname, "../.env"),
 });
-
-if (result.error) {
-  console.error("❌ Failed to load .env");
-  throw result.error;
-}
 
 dns.setServers(["1.1.1.1", "8.8.8.8"]);
 
@@ -47,16 +42,18 @@ async function startServer() {
     // CORS
     app.use(
       cors({
-        origin: process.env.CLIENT_URL || "http://localhost:5173",
+        origin:
+          process.env.CLIENT_URL ||
+          "http://localhost:5173",
         credentials: false,
-      }),
+      })
     );
 
     // JSON body parser
     app.use(
       express.json({
         limit: "100kb",
-      }),
+      })
     );
 
     // Global rate limit
@@ -66,7 +63,7 @@ async function startServer() {
         limit: 180,
         standardHeaders: true,
         legacyHeaders: false,
-      }),
+      })
     );
 
     // =========================
@@ -84,9 +81,7 @@ async function startServer() {
     // =========================
 
     app.use("/api/auth", authRoutes);
-
     app.use("/api/webhooks", webhookRoutes);
-
     app.use("/api/messages", messageRoutes);
 
     // =========================
@@ -121,16 +116,15 @@ async function startServer() {
     // =========================
 
     app.listen(PORT, () => {
-      console.log(`✅ Server running on http://localhost:${PORT}`);
-      console.log(`✅ Health: http://localhost:${PORT}/api/health`);
-      console.log(`✅ Auth: http://localhost:${PORT}/api/auth`);
-      console.log(`✅ Webhooks: http://localhost:${PORT}/api/webhooks`);
-      console.log(`✅ Messages: http://localhost:${PORT}/api/messages`);
+      console.log(`✅ Server running on port ${PORT}`);
+      console.log(`✅ Health: /api/health`);
+      console.log(`✅ Auth: /api/auth`);
+      console.log(`✅ Webhooks: /api/webhooks`);
+      console.log(`✅ Messages: /api/messages`);
     });
   } catch (error) {
     console.error("❌ Failed to start server");
     console.error("message:", error.message);
-
     process.exit(1);
   }
 }
