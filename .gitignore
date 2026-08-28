@@ -23,3 +23,10 @@ npm-debug.log*
 .DS_Store
 Thumbs.db
 .vscode/
+
+node_modules/
+.env
+.env.*
+!.env.example
+dist/
+.vite/
