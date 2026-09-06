@@ -10,6 +10,8 @@ import Layout from "./components/Layout";
 import LoginPage from "./pages/LoginPage";
 import SendPage from "./pages/SendPage";
 import WebhooksPage from "./pages/WebhooksPage";
+import UsersPage from "./pages/UsersPage";
+import ProfilePage from "./pages/ProfilePage";
 import ChangePasswordPage from "./pages/ChangePasswordPage";
 
 export default function App() {
@@ -49,8 +51,20 @@ export default function App() {
         />
 
         <Route
+          path="users"
+          element={<UsersPage />}
+        />
+
+        <Route
+          path="profile"
+          element={<ProfilePage />}
+        />
+
+        <Route
           path="change-password"
-          element={<ChangePasswordPage />}
+          element={
+            <ChangePasswordPage />
+          }
         />
       </Route>
 

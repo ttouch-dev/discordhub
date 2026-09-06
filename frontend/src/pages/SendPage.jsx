@@ -15,11 +15,11 @@ function nextDayText() {
 
   d.setDate(d.getDate() + 1);
 
-  const dd = String(d.getDate()).padStart(2, "0");
   const mm = String(d.getMonth() + 1).padStart(2, "0");
+  const dd = String(d.getDate()).padStart(2, "0");
   const yyyy = d.getFullYear();
 
-  return `NEXT DAY\n${dd}/${mm}/${yyyy}`;
+  return `NEXT DAY\n${mm}/${dd}/${yyyy}`;
 }
 
 export default function SendPage() {

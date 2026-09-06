@@ -33,6 +33,10 @@ export default function WebhooksPage() {
   const [search, setSearch] = useState("");
   const [currentPage, setCurrentPage] = useState(1);
 
+  // Delete modal state
+  const [deleteTarget, setDeleteTarget] = useState(null);
+  const [deleting, setDeleting] = useState(false);
+
   async function load() {
     try {
       const { data } = await api.get("/webhooks");
@@ -322,34 +326,47 @@ export default function WebhooksPage() {
     }
   }
 
-  async function remove(w) {
-    const confirmed =
-      window.confirm(
-        `Delete ${w.name}? This cannot be undone.`,
-      );
+  // Open delete confirmation modal
+  function remove(w) {
+    setDeleteTarget(w);
+  }
 
-    if (!confirmed) return;
+  // Actually delete selected webhook
+  async function confirmDelete() {
+    if (!deleteTarget) return;
+
+    setDeleting(true);
 
     try {
       await api.delete(
-        `/webhooks/${w._id}`,
+        `/webhooks/${deleteTarget._id}`,
       );
 
       setWebhooks((list) =>
         list.filter(
           (x) =>
-            x._id !== w._id,
+            x._id !== deleteTarget._id,
         ),
       );
 
       toast.success(
-        "Webhook deleted",
+        `${deleteTarget.name} deleted successfully`,
       );
+
+      setDeleteTarget(null);
     } catch (error) {
       toast.error(
         getErrorMessage(error),
       );
+    } finally {
+      setDeleting(false);
     }
+  }
+
+  function closeDeleteModal() {
+    if (deleting) return;
+
+    setDeleteTarget(null);
   }
 
   const paginationButtonStyle = (
@@ -577,7 +594,7 @@ export default function WebhooksPage() {
                   fontWeight: 600,
                 }}
               >
-                30 per page
+                {ITEMS_PER_PAGE} per page
               </span>
             </div>
 
@@ -763,6 +780,7 @@ export default function WebhooksPage() {
         )}
       </div>
 
+      {/* Add / Edit Modal */}
       {modal && (
         <div
           className="modal-backdrop"
@@ -909,6 +927,268 @@ export default function WebhooksPage() {
               </button>
             </div>
           </form>
+        </div>
+      )}
+
+      {/* Delete Confirmation Modal */}
+      {deleteTarget && (
+        <div
+          className="modal-backdrop"
+          role="presentation"
+          onMouseDown={(e) => {
+            if (
+              e.target ===
+              e.currentTarget
+            ) {
+              closeDeleteModal();
+            }
+          }}
+        >
+          <div
+            className="modal-card"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="delete-webhook-title"
+            style={{
+              width:
+                "calc(100% - 32px)",
+              maxWidth:
+                "460px",
+            }}
+          >
+            <div className="modal-head">
+              <div>
+                <h2
+                  id="delete-webhook-title"
+                  style={{
+                    color:
+                      "#b91c1c",
+                  }}
+                >
+                  Delete Webhook?
+                </h2>
+
+                <p>
+                  You are about to delete the selected webhook.
+                  This action cannot be undone.
+                </p>
+              </div>
+
+              <button
+                type="button"
+                className="icon-btn"
+                onClick={
+                  closeDeleteModal
+                }
+                disabled={
+                  deleting
+                }
+                aria-label="Close"
+              >
+                <X size={20} />
+              </button>
+            </div>
+
+            <div
+              style={{
+                marginTop:
+                  "18px",
+                padding:
+                  "16px",
+                border:
+                  "1px solid #fecaca",
+                background:
+                  "#fef2f2",
+                borderRadius:
+                  "12px",
+              }}
+            >
+              <div
+                style={{
+                  display:
+                    "flex",
+                  alignItems:
+                    "flex-start",
+                  justifyContent:
+                    "space-between",
+                  gap:
+                    "12px",
+                }}
+              >
+                <div>
+                  <span
+                    style={{
+                      display:
+                        "inline-flex",
+                      alignItems:
+                        "center",
+                      minHeight:
+                        "22px",
+                      padding:
+                        "2px 8px",
+                      borderRadius:
+                        "999px",
+                      background:
+                        "#e0e7ff",
+                      color:
+                        "#3730a3",
+                      fontSize:
+                        "11px",
+                      fontWeight:
+                        700,
+                      marginBottom:
+                        "8px",
+                    }}
+                  >
+                    {deleteTarget.group ||
+                      "GENERAL"}
+                  </span>
+
+                  <h3
+                    style={{
+                      margin:
+                        "0 0 8px",
+                      fontSize:
+                        "18px",
+                      color:
+                        "#111827",
+                    }}
+                  >
+                    {deleteTarget.name}
+                  </h3>
+                </div>
+
+                <div
+                  style={{
+                    width:
+                      "36px",
+                    height:
+                      "36px",
+                    display:
+                      "flex",
+                    alignItems:
+                      "center",
+                    justifyContent:
+                      "center",
+                    borderRadius:
+                      "10px",
+                    background:
+                      "#fee2e2",
+                    color:
+                      "#dc2626",
+                    flexShrink:
+                      0,
+                  }}
+                >
+                  <Trash2
+                    size={18}
+                  />
+                </div>
+              </div>
+
+              <p
+                style={{
+                  margin: 0,
+                  color:
+                    "#6b7280",
+                  fontSize:
+                    "13px",
+                  lineHeight:
+                    1.6,
+                  wordBreak:
+                    "break-all",
+                }}
+              >
+                {deleteTarget.maskedUrl ||
+                  "Webhook URL unavailable"}
+              </p>
+            </div>
+
+            <div
+              style={{
+                display:
+                  "flex",
+                alignItems:
+                  "flex-start",
+                gap:
+                  "10px",
+                marginTop:
+                  "14px",
+                padding:
+                  "12px 14px",
+                border:
+                  "1px solid #fed7aa",
+                background:
+                  "#fff7ed",
+                borderRadius:
+                  "10px",
+                color:
+                  "#9a3412",
+                fontSize:
+                  "13px",
+                lineHeight:
+                  1.5,
+              }}
+            >
+              <Trash2
+                size={17}
+                style={{
+                  flexShrink:
+                    0,
+                  marginTop:
+                    "1px",
+                }}
+              />
+
+              <span>
+                Only this webhook card will be deleted.
+              </span>
+            </div>
+
+            <div className="modal-actions">
+              <button
+                type="button"
+                className="secondary-btn"
+                onClick={
+                  closeDeleteModal
+                }
+                disabled={
+                  deleting
+                }
+              >
+                Cancel
+              </button>
+
+              <button
+                type="button"
+                className="danger-btn"
+                onClick={
+                  confirmDelete
+                }
+                disabled={
+                  deleting
+                }
+                style={{
+                  display:
+                    "inline-flex",
+                  alignItems:
+                    "center",
+                  justifyContent:
+                    "center",
+                  gap:
+                    "7px",
+                }}
+              >
+                <Trash2
+                  size={16}
+                />
+
+                {deleting
+                  ? "Deleting..."
+                  : "Delete Webhook"}
+              </button>
+            </div>
+          </div>
         </div>
       )}
     </section>
