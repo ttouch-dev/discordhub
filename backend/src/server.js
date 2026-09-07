@@ -1,37 +1,9 @@
 const dotenv = require("dotenv");
 const path = require("path");
 
-// =====================================================
-// LOAD ENV FIRST
-// =====================================================
-
 dotenv.config({
   path: path.resolve(__dirname, "../.env"),
 });
-
-// =====================================================
-// DEBUG ENV
-// Remove this block later if you want
-// =====================================================
-
-console.log("Cloudinary ENV:", {
-  cloudName:
-    process.env.CLOUDINARY_CLOUD_NAME,
-
-  apiKeyLoaded:
-    Boolean(
-      process.env.CLOUDINARY_API_KEY
-    ),
-
-  apiSecretLoaded:
-    Boolean(
-      process.env.CLOUDINARY_API_SECRET
-    ),
-});
-
-// =====================================================
-// IMPORTS AFTER ENV IS LOADED
-// =====================================================
 
 const dns = require("dns");
 const express = require("express");
@@ -40,35 +12,22 @@ const helmet = require("helmet");
 const rateLimit = require("express-rate-limit");
 const cron = require("node-cron");
 
-const {
-  connectDB,
-} = require("./config/db");
+const { connectDB } = require("./config/db");
 
-const authRoutes =
-  require("./routes/authRoutes");
+const authRoutes = require("./routes/authRoutes");
+const webhookRoutes = require("./routes/webhookRoutes");
+const messageRoutes = require("./routes/messageRoutes");
 
-const webhookRoutes =
-  require("./routes/webhookRoutes");
-
-const messageRoutes =
-  require("./routes/messageRoutes");
+const { ensureAdmin } = require("./utils/ensureAdmin");
 
 const {
-  ensureAdmin,
-} = require("./utils/ensureAdmin");
-
-// =====================================================
-// DNS
-// =====================================================
+  startOrderCounter,
+} = require("./services/orderCounterService");
 
 dns.setServers([
   "1.1.1.1",
   "8.8.8.8",
 ]);
-
-// =====================================================
-// CONFIG
-// =====================================================
 
 const PORT =
   process.env.PORT || 5000;
@@ -80,55 +39,16 @@ const SERVER_URL =
   process.env.SERVER_URL ||
   `http://localhost:${PORT}`;
 
-// =====================================================
-// HEALTH API CRON FUNCTION
-// =====================================================
-
-async function callHealthApi(
-  jobName
-) {
+async function callHealthApi() {
   try {
     const url =
       `${SERVER_URL}/api/health`;
 
-    const bdTime =
-      new Date().toLocaleString(
-        "en-US",
-        {
-          timeZone:
-            BD_TIMEZONE,
-        }
-      );
-
-    console.log("");
-
-    console.log(
-      "======================================"
-    );
-
-    console.log(
-      `⏰ ${jobName}`
-    );
-
-    console.log(
-      `🇧🇩 Bangladesh Time: ${bdTime}`
-    );
-
-    console.log(
-      `🔗 Calling: ${url}`
-    );
-
-    console.log(
-      "======================================"
-    );
-
     const response =
       await fetch(url, {
         method: "GET",
-
         headers: {
-          Accept:
-            "application/json",
+          Accept: "application/json",
         },
       });
 
@@ -142,111 +62,35 @@ async function callHealthApi(
       await response.json();
 
     console.log(
-      "✅ Health API called successfully"
-    );
-
-    console.log(
-      "Response:",
-      data
+      "✅ Health check:",
+      data.bangladeshTime
     );
   } catch (error) {
     console.error(
-      `❌ ${jobName} health check failed:`,
+      "❌ Health check failed:",
       error.message
     );
   }
 }
 
-// =====================================================
-// CRON JOBS
-// =====================================================
-
-function startCronJobs() {
-  // -------------------------------------------------
-  // EVERY DAY AT 3:46 PM BANGLADESH TIME
-  // -------------------------------------------------
-
+function startHealthCron() {
   cron.schedule(
-    "46 15 * * *",
-
+    "*/15 * * * *",
     async () => {
-      await callHealthApi(
-        "3:46 PM Bangladesh Cron"
-      );
+      await callHealthApi();
     },
-
     {
-      timezone:
-        BD_TIMEZONE,
+      timezone: BD_TIMEZONE,
     }
   );
 
-  // -------------------------------------------------
-  // EVERY DAY AT 4:10 PM BANGLADESH TIME
-  // -------------------------------------------------
-
-  cron.schedule(
-    "10 16 * * *",
-
-    async () => {
-      await callHealthApi(
-        "4:10 PM Bangladesh Cron"
-      );
-    },
-
-    {
-      timezone:
-        BD_TIMEZONE,
-    }
-  );
-
-  console.log("");
-
   console.log(
-    "======================================"
+    "✅ Health check scheduled every 15 minutes"
   );
-
-  console.log(
-    "⏰ CRON JOBS REGISTERED"
-  );
-
-  console.log(
-    "======================================"
-  );
-
-  console.log(
-    "✅ Health check: Every day at 3:46 PM BD"
-  );
-
-  console.log(
-    "✅ Health check: Every day at 4:10 PM BD"
-  );
-
-  console.log(
-    `🌏 Timezone: ${BD_TIMEZONE}`
-  );
-
-  console.log(
-    `🔗 Server URL: ${SERVER_URL}`
-  );
-
-  console.log(
-    "======================================"
-  );
-
-  console.log("");
 }
-
-// =====================================================
-// START SERVER
-// =====================================================
 
 async function startServer() {
   try {
-    // =================================================
-    // MONGODB CONNECTION
-    // =================================================
-
     await connectDB(
       process.env.MONGO_URI
     );
@@ -255,19 +99,11 @@ async function startServer() {
       "✅ MongoDB connected"
     );
 
-    // =================================================
-    // ENSURE ADMIN EXISTS
-    // =================================================
-
     await ensureAdmin();
 
     console.log(
       "✅ Admin check completed"
     );
-
-    // =================================================
-    // EXPRESS
-    // =================================================
 
     const app = express();
 
@@ -276,17 +112,9 @@ async function startServer() {
       1
     );
 
-    // =================================================
-    // SECURITY
-    // =================================================
-
     app.use(
       helmet()
     );
-
-    // =================================================
-    // CORS
-    // =================================================
 
     app.use(
       cors({
@@ -299,19 +127,11 @@ async function startServer() {
       })
     );
 
-    // =================================================
-    // JSON BODY PARSER
-    // =================================================
-
     app.use(
       express.json({
         limit: "3mb",
       })
     );
-
-    // =================================================
-    // GLOBAL RATE LIMIT
-    // =================================================
 
     app.use(
       rateLimit({
@@ -329,13 +149,8 @@ async function startServer() {
       })
     );
 
-    // =================================================
-    // HEALTH CHECK
-    // =================================================
-
     app.get(
       "/api/health",
-
       (_req, res) => {
         const now =
           new Date();
@@ -349,30 +164,18 @@ async function startServer() {
             }
           );
 
-        console.log(
-          `💓 Health API called | BD: ${bangladeshTime}`
-        );
-
         res.json({
           ok: true,
-
           message:
             "Server is healthy",
-
           timestamp:
             now.toISOString(),
-
           bangladeshTime,
-
           timezone:
             BD_TIMEZONE,
         });
       }
     );
-
-    // =================================================
-    // API ROUTES
-    // =================================================
 
     app.use(
       "/api/auth",
@@ -389,10 +192,6 @@ async function startServer() {
       messageRoutes
     );
 
-    // =================================================
-    // 404 HANDLER
-    // =================================================
-
     app.use(
       (req, res) => {
         res
@@ -400,19 +199,13 @@ async function startServer() {
           .json({
             message:
               "API route not found",
-
             method:
               req.method,
-
             path:
               req.originalUrl,
           });
       }
     );
-
-    // =================================================
-    // ERROR HANDLER
-    // =================================================
 
     app.use(
       (
@@ -428,8 +221,7 @@ async function startServer() {
 
         res
           .status(
-            err.status ||
-            500
+            err.status || 500
           )
           .json({
             message:
@@ -442,67 +234,30 @@ async function startServer() {
       }
     );
 
-    // =================================================
-    // START EXPRESS SERVER
-    // =================================================
-
     app.listen(
       PORT,
-
-      () => {
-        console.log("");
-
-        console.log(
-          "======================================"
-        );
-
+      async () => {
         console.log(
           `✅ Server running on port ${PORT}`
         );
 
         console.log(
-          `✅ Health: ${SERVER_URL}/api/health`
+          `✅ Health URL: ${SERVER_URL}/api/health`
         );
 
-        console.log(
-          "✅ Auth: /api/auth"
-        );
+        startHealthCron();
 
-        console.log(
-          "✅ Webhooks: /api/webhooks"
-        );
-
-        console.log(
-          "✅ Messages: /api/messages"
-        );
-
-        console.log(
-          "======================================"
-        );
-
-        // =============================================
-        // START CRON JOBS
-        // =============================================
-
-        startCronJobs();
+        await startOrderCounter();
       }
     );
   } catch (error) {
     console.error(
-      "❌ Failed to start server"
-    );
-
-    console.error(
-      "message:",
+      "❌ Failed to start server:",
       error.message
     );
 
     process.exit(1);
   }
 }
-
-// =====================================================
-// BOOTSTRAP
-// =====================================================
 
 startServer();
