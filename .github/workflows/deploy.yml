@@ -1,12 +1,10 @@
 name: Deploy DiscordHub to Contabo
 
-# Run deployment whenever code is pushed to main
 on:
   push:
     branches:
       - main
 
-  # Also allows manual deployment from GitHub Actions
   workflow_dispatch:
 
 jobs:
@@ -15,11 +13,9 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      # Optional checkout - useful for workflow visibility/debugging
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      # Connect to Contabo through SSH
       - name: Deploy DiscordHub
         uses: appleboy/ssh-action@v1
         with:
@@ -36,7 +32,7 @@ jobs:
             echo "======================================"
 
             # -----------------------------------------
-            # Go to project
+            # Project directory
             # -----------------------------------------
             cd /var/www/discordhub
 
@@ -63,21 +59,30 @@ jobs:
 
             cd /var/www/discordhub/backend
 
-            # Install production dependencies
+            echo "Installing backend dependencies..."
             npm ci --omit=dev
 
-            # Make sure production .env exists
+            # Check production environment file
             if [ ! -f .env ]; then
-              echo "ERROR: backend/.env not found!"
+              echo "ERROR: /var/www/discordhub/backend/.env not found!"
               exit 1
             fi
 
             # -----------------------------------------
-            # Restart backend
+            # Restart or start backend with PM2
             # -----------------------------------------
-            echo "Restarting DiscordHub backend..."
+            echo "Starting/Restarting DiscordHub backend..."
 
-            pm2 restart discordhub --update-env
+            if pm2 describe discordhub-backend > /dev/null 2>&1; then
+              echo "Existing PM2 process found."
+              pm2 restart discordhub-backend --update-env
+            else
+              echo "PM2 process not found. Starting new process..."
+              pm2 start npm \
+                --name "discordhub-backend" \
+                --cwd /var/www/discordhub/backend \
+                -- start
+            fi
 
             # -----------------------------------------
             # Frontend
@@ -88,13 +93,27 @@ jobs:
 
             cd /var/www/discordhub/frontend
 
+            echo "Installing frontend dependencies..."
             npm ci
+
+            echo "Building frontend..."
             npm run build
 
             # -----------------------------------------
             # Save PM2 configuration
             # -----------------------------------------
+            echo "Saving PM2 configuration..."
+
             pm2 save
+
+            # -----------------------------------------
+            # Show status
+            # -----------------------------------------
+            echo "======================================"
+            echo "PM2 Status"
+            echo "======================================"
+
+            pm2 list
 
             echo "======================================"
             echo "DiscordHub Deployment Completed"
