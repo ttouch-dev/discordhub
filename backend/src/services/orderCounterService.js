@@ -7,6 +7,10 @@ const axios = require("axios");
 const cron = require("node-cron");
 const mongoose = require("mongoose");
 
+// =====================================================
+// CONFIGURATION
+// =====================================================
+
 const BD_TIMEZONE = "Asia/Dhaka";
 
 const SOURCE_CHANNEL_ID =
@@ -160,7 +164,6 @@ function getDateKey(parts) {
 
 // =====================================================
 // MONGODB RUN TRACKING
-// No model required
 // =====================================================
 
 function getRunCollection() {
@@ -199,10 +202,10 @@ async function setupRunCollection() {
 
 
 /**
- * Claim a shift before sending.
+ * Claim a report before sending.
  *
- * Returns true  = run the shift
- * Returns false = already sent/running
+ * true  = run
+ * false = already sent/running
  */
 async function claimRun(
   runKey,
@@ -225,13 +228,13 @@ async function claimRun(
     return false;
   }
 
-  // If old RUNNING lock exists for more
-  // than 30 minutes, allow retry.
+  // RUNNING lock older than 30 minutes
+  // can be retried.
   if (existing?.status === "RUNNING") {
     const updatedAt =
       new Date(
         existing.updatedAt ||
-          existing.createdAt
+        existing.createdAt
       );
 
     const age =
@@ -275,7 +278,9 @@ async function claimRun(
     });
 
     return true;
+
   } catch (error) {
+
     if (error.code === 11000) {
       console.log(
         `⏭️ Run already claimed: ${runKey}`
@@ -337,7 +342,7 @@ async function releaseRun(
 
 
 // =====================================================
-// FETCH ORDERS
+// FETCH ORDERS FROM DISCORD
 // =====================================================
 
 async function getOrdersBetween(
@@ -367,6 +372,7 @@ async function getOrdersBetween(
     );
   }
 
+  // Map prevents duplicate TC numbers.
   const foundOrders =
     new Map();
 
@@ -402,7 +408,8 @@ async function getOrdersBetween(
       const timestamp =
         message.createdTimestamp;
 
-      // Message newer than requested range
+      // Ignore messages newer than
+      // requested end time.
       if (
         timestamp >=
         endTime.getTime()
@@ -410,7 +417,8 @@ async function getOrdersBetween(
         continue;
       }
 
-      // Message older than requested range
+      // Stop when messages become
+      // older than requested start time.
       if (
         timestamp <
         startTime.getTime()
@@ -609,7 +617,7 @@ async function sendDailyTotal(
   );
 
   console.log(
-    "🚀 Daily Total processing"
+    "📊 Daily Total processing"
   );
 
   const orders =
@@ -626,6 +634,8 @@ async function sendDailyTotal(
 
   const message =
 `${date}
+
+Daily Total
 
 ${range}
 
@@ -650,11 +660,12 @@ Total order ${orders.length}`;
 // =====================================================
 // NIGHT SHIFT
 //
-// Report date = day that ends at 3 AM
+// Previous day 9 PM → Current day 2 AM
 //
-// Previous day 9 PM
-//        ↓
-// Current day 3 AM
+// Example:
+// 19 Sep 9 PM → 20 Sep 2 AM
+//
+// Report sends at 2:00 AM
 // =====================================================
 
 async function runNightShiftForDate(
@@ -681,7 +692,7 @@ async function runNightShiftForDate(
       target.year,
       target.month,
       target.day,
-      3
+      2
     );
 
   const runKey =
@@ -705,8 +716,10 @@ async function runNightShiftForDate(
       await sendShiftReport({
         shiftName:
           "Night Shift",
+
         startTime,
         endTime,
+
         reportDate:
           endTime,
       });
@@ -715,7 +728,9 @@ async function runNightShiftForDate(
       runKey,
       count
     );
+
   } catch (error) {
+
     await releaseRun(
       runKey,
       error
@@ -724,7 +739,7 @@ async function runNightShiftForDate(
     console.error(
       "❌ Night Shift failed:",
       error.response?.data ||
-        error.message
+      error.message
     );
 
     throw error;
@@ -735,7 +750,9 @@ async function runNightShiftForDate(
 // =====================================================
 // MORNING SHIFT
 //
-// 3 AM → 3 PM
+// 2 AM → 3 PM
+//
+// Report sends at 3:00 PM
 // =====================================================
 
 async function runMorningShiftForDate(
@@ -746,7 +763,7 @@ async function runMorningShiftForDate(
       target.year,
       target.month,
       target.day,
-      3
+      2
     );
 
   const endTime =
@@ -778,8 +795,10 @@ async function runMorningShiftForDate(
       await sendShiftReport({
         shiftName:
           "Morning Shift",
+
         startTime,
         endTime,
+
         reportDate:
           endTime,
       });
@@ -788,7 +807,9 @@ async function runMorningShiftForDate(
       runKey,
       count
     );
+
   } catch (error) {
+
     await releaseRun(
       runKey,
       error
@@ -797,7 +818,7 @@ async function runMorningShiftForDate(
     console.error(
       "❌ Morning Shift failed:",
       error.response?.data ||
-        error.message
+      error.message
     );
 
     throw error;
@@ -809,6 +830,8 @@ async function runMorningShiftForDate(
 // DAY SHIFT
 //
 // 3 PM → 9 PM
+//
+// Report sends at 9:00 PM
 // =====================================================
 
 async function runDayShiftForDate(
@@ -851,8 +874,10 @@ async function runDayShiftForDate(
       await sendShiftReport({
         shiftName:
           "Day Shift",
+
         startTime,
         endTime,
+
         reportDate:
           endTime,
       });
@@ -861,7 +886,9 @@ async function runDayShiftForDate(
       runKey,
       count
     );
+
   } catch (error) {
+
     await releaseRun(
       runKey,
       error
@@ -870,7 +897,7 @@ async function runDayShiftForDate(
     console.error(
       "❌ Day Shift failed:",
       error.response?.data ||
-        error.message
+      error.message
     );
 
     throw error;
@@ -881,7 +908,13 @@ async function runDayShiftForDate(
 // =====================================================
 // DAILY TOTAL
 //
-// Previous day 9 PM → Current day 9 PM
+// Previous day 2 AM → Current day 2 AM
+//
+// Example:
+// 19 Sep 2 AM → 20 Sep 2 AM
+//
+// Night ends: 2:00 AM
+// Daily Total sends: 2:01 AM
 // =====================================================
 
 async function runDailyTotalForDate(
@@ -900,7 +933,7 @@ async function runDailyTotalForDate(
       yesterday.year,
       yesterday.month,
       yesterday.day,
-      21
+      2
     );
 
   const endTime =
@@ -908,7 +941,7 @@ async function runDailyTotalForDate(
       target.year,
       target.month,
       target.day,
-      21
+      2
     );
 
   const runKey =
@@ -939,7 +972,9 @@ async function runDailyTotalForDate(
       runKey,
       count
     );
+
   } catch (error) {
+
     await releaseRun(
       runKey,
       error
@@ -948,7 +983,7 @@ async function runDailyTotalForDate(
     console.error(
       "❌ Daily Total failed:",
       error.response?.data ||
-        error.message
+      error.message
     );
 
     throw error;
@@ -967,6 +1002,18 @@ async function runNightShift() {
     );
 
   await runNightShiftForDate(
+    target
+  );
+}
+
+
+async function runDailyTotal() {
+  const target =
+    getBDParts(
+      new Date()
+    );
+
+  await runDailyTotalForDate(
     target
   );
 }
@@ -993,18 +1040,24 @@ async function runDayShift() {
   await runDayShiftForDate(
     target
   );
-
-  await runDailyTotalForDate(
-    target
-  );
 }
 
 
 // =====================================================
 // MISSED SHIFT RECOVERY
+//
+// This is NOT server health check.
+//
+// It runs once when backend starts/restarts.
+// It checks completed reports and sends any
+// report that was missed while Contabo/backend
+// was unavailable.
+//
+// MongoDB runKey prevents duplicates.
 // =====================================================
 
 async function recoverMissedShifts() {
+
   if (recoveryRunning) {
     console.log(
       "⏭️ Recovery already running"
@@ -1027,6 +1080,7 @@ async function recoverMissedShifts() {
   recoveryRunning = true;
 
   try {
+
     const now =
       new Date();
 
@@ -1039,7 +1093,7 @@ async function recoverMissedShifts() {
     );
 
     console.log(
-      "🔍 Checking missed order counter shifts"
+      "🔍 Checking missed order counter reports"
     );
 
     console.log(
@@ -1058,23 +1112,27 @@ async function recoverMissedShifts() {
       )}`
     );
 
-    /*
-     * Current day's completed shifts only.
-     *
-     * Example:
-     * 4 PM:
-     * Night + Morning are eligible.
-     *
-     * 10 PM:
-     * Night + Morning + Day + Daily Total.
-     */
+
+    // ================================================
+    // DUE TIMES
+    // ================================================
 
     const nightDue =
       makeBDDate(
         today.year,
         today.month,
         today.day,
-        3
+        2,
+        0
+      );
+
+    const dailyTotalDue =
+      makeBDDate(
+        today.year,
+        today.month,
+        today.day,
+        2,
+        1
       );
 
     const morningDue =
@@ -1082,7 +1140,8 @@ async function recoverMissedShifts() {
         today.year,
         today.month,
         today.day,
-        15
+        15,
+        0
       );
 
     const dayDue =
@@ -1090,8 +1149,14 @@ async function recoverMissedShifts() {
         today.year,
         today.month,
         today.day,
-        21
+        21,
+        0
       );
+
+
+    // ================================================
+    // NIGHT SHIFT
+    // ================================================
 
     if (
       now.getTime() >=
@@ -1113,6 +1178,36 @@ async function recoverMissedShifts() {
       }
     }
 
+
+    // ================================================
+    // DAILY TOTAL
+    // ================================================
+
+    if (
+      now.getTime() >=
+      dailyTotalDue.getTime()
+    ) {
+      console.log(
+        "🔍 Checking Daily Total..."
+      );
+
+      try {
+        await runDailyTotalForDate(
+          today
+        );
+      } catch (error) {
+        console.error(
+          "❌ Daily Total recovery error:",
+          error.message
+        );
+      }
+    }
+
+
+    // ================================================
+    // MORNING SHIFT
+    // ================================================
+
     if (
       now.getTime() >=
       morningDue.getTime()
@@ -1133,6 +1228,11 @@ async function recoverMissedShifts() {
       }
     }
 
+
+    // ================================================
+    // DAY SHIFT
+    // ================================================
+
     if (
       now.getTime() >=
       dayDue.getTime()
@@ -1151,31 +1251,19 @@ async function recoverMissedShifts() {
           error.message
         );
       }
-
-      console.log(
-        "🔍 Checking Daily Total..."
-      );
-
-      try {
-        await runDailyTotalForDate(
-          today
-        );
-      } catch (error) {
-        console.error(
-          "❌ Daily Total recovery error:",
-          error.message
-        );
-      }
     }
 
+
     console.log(
-      "✅ Missed shift check completed"
+      "✅ Missed report check completed"
     );
 
     console.log(
       "======================================"
     );
+
   } finally {
+
     recoveryRunning = false;
   }
 }
@@ -1186,6 +1274,7 @@ async function recoverMissedShifts() {
 // =====================================================
 
 async function waitForDiscordReady() {
+
   if (
     discordClient &&
     discordClient.isReady()
@@ -1195,6 +1284,7 @@ async function waitForDiscordReady() {
 
   await new Promise(
     (resolve, reject) => {
+
       const timeout =
         setTimeout(
           () => {
@@ -1210,6 +1300,7 @@ async function waitForDiscordReady() {
       discordClient.once(
         "clientReady",
         () => {
+
           clearTimeout(
             timeout
           );
@@ -1227,6 +1318,7 @@ async function waitForDiscordReady() {
 // =====================================================
 
 async function startOrderCounter() {
+
   if (!DISCORD_BOT_TOKEN) {
     console.log(
       "⚠️ DISCORD_BOT_TOKEN missing. Order counter disabled."
@@ -1243,9 +1335,7 @@ async function startOrderCounter() {
     return;
   }
 
-  if (
-    !DESTINATION_WEBHOOK_URL
-  ) {
+  if (!DESTINATION_WEBHOOK_URL) {
     console.log(
       "⚠️ DESTINATION_WEBHOOK_URL missing. Order counter disabled."
     );
@@ -1253,22 +1343,29 @@ async function startOrderCounter() {
     return;
   }
 
+
+  // MongoDB must already be connected.
   await setupRunCollection();
+
 
   discordClient =
     new Client({
       intents: [
         GatewayIntentBits.Guilds,
+
         GatewayIntentBits
           .GuildMessages,
+
         GatewayIntentBits
           .MessageContent,
       ],
     });
 
+
   discordClient.once(
     "clientReady",
     () => {
+
       console.log(
         `🤖 Discord bot logged in as ${discordClient.user.tag}`
       );
@@ -1278,22 +1375,39 @@ async function startOrderCounter() {
       );
 
       console.log(
-        "✅ Night: 9 PM - 3 AM"
+        "🌅 Morning: 2 AM - 3 PM"
       );
 
       console.log(
-        "✅ Morning: 3 AM - 3 PM"
+        "☀️ Day: 3 PM - 9 PM"
       );
 
       console.log(
-        "✅ Day: 3 PM - 9 PM"
+        "🌙 Night: 9 PM - 2 AM"
+      );
+
+      console.log(
+        "📊 Daily Total: 2 AM - 2 AM"
+      );
+
+      console.log(
+        "📊 Daily Total sends at 2:01 AM"
       );
 
       console.log(
         "✅ Timezone: Asia/Dhaka"
       );
+
+      console.log(
+        "✅ Contabo deployment mode"
+      );
+
+      console.log(
+        "🚫 15-minute health/recovery cron disabled"
+      );
     }
   );
+
 
   await discordClient.login(
     DISCORD_BOT_TOKEN
@@ -1303,25 +1417,32 @@ async function startOrderCounter() {
 
 
   // ===================================================
-  // 03:00 AM
+  // NIGHT SHIFT
+  // Every day at 02:00 AM Bangladesh time
   // ===================================================
 
   cron.schedule(
-    "0 3 * * *",
+    "0 2 * * *",
+
     async () => {
+
       console.log(
-        "⏰ NIGHT SHIFT CRON FIRED - 3:00 AM BD"
+        "⏰ NIGHT SHIFT CRON FIRED - 2:00 AM BD"
       );
 
       try {
+
         await runNightShift();
+
       } catch (error) {
+
         console.error(
           "❌ Night cron error:",
           error.message
         );
       }
     },
+
     {
       timezone:
         BD_TIMEZONE,
@@ -1330,25 +1451,68 @@ async function startOrderCounter() {
 
 
   // ===================================================
-  // 03:00 PM
+  // DAILY TOTAL
+  // Every day at 02:01 AM Bangladesh time
+  //
+  // Exactly 1 minute after Night Shift ends.
+  // ===================================================
+
+  cron.schedule(
+    "1 2 * * *",
+
+    async () => {
+
+      console.log(
+        "⏰ DAILY TOTAL CRON FIRED - 2:01 AM BD"
+      );
+
+      try {
+
+        await runDailyTotal();
+
+      } catch (error) {
+
+        console.error(
+          "❌ Daily Total cron error:",
+          error.message
+        );
+      }
+    },
+
+    {
+      timezone:
+        BD_TIMEZONE,
+    }
+  );
+
+
+  // ===================================================
+  // MORNING SHIFT
+  // Every day at 03:00 PM Bangladesh time
   // ===================================================
 
   cron.schedule(
     "0 15 * * *",
+
     async () => {
+
       console.log(
         "⏰ MORNING SHIFT CRON FIRED - 3:00 PM BD"
       );
 
       try {
+
         await runMorningShift();
+
       } catch (error) {
+
         console.error(
           "❌ Morning cron error:",
           error.message
         );
       }
     },
+
     {
       timezone:
         BD_TIMEZONE,
@@ -1357,25 +1521,32 @@ async function startOrderCounter() {
 
 
   // ===================================================
-  // 09:00 PM
+  // DAY SHIFT
+  // Every day at 09:00 PM Bangladesh time
   // ===================================================
 
   cron.schedule(
     "0 21 * * *",
+
     async () => {
+
       console.log(
         "⏰ DAY SHIFT CRON FIRED - 9:00 PM BD"
       );
 
       try {
+
         await runDayShift();
+
       } catch (error) {
+
         console.error(
           "❌ Day cron error:",
           error.message
         );
       }
     },
+
     {
       timezone:
         BD_TIMEZONE,
@@ -1384,27 +1555,20 @@ async function startOrderCounter() {
 
 
   // ===================================================
-  // RECOVERY CHECK
-  // Every 15 minutes
+  // IMPORTANT
+  //
+  // OLD:
+  //
+  // cron.schedule(
+  //   "*/15 * * * *",
+  //   recoverMissedShifts
+  // );
+  //
+  // REMOVED.
+  //
+  // No 15-minute scheduled health/recovery check.
+  // Backend is running on Contabo.
   // ===================================================
-
-  cron.schedule(
-    "*/15 * * * *",
-    async () => {
-      try {
-        await recoverMissedShifts();
-      } catch (error) {
-        console.error(
-          "❌ Recovery cron error:",
-          error.message
-        );
-      }
-    },
-    {
-      timezone:
-        BD_TIMEZONE,
-    }
-  );
 
 
   console.log(
@@ -1412,14 +1576,39 @@ async function startOrderCounter() {
   );
 
   console.log(
-    "🔄 Missed shift recovery: Every 15 minutes"
+    "🌙 Night report: 2:00 AM"
+  );
+
+  console.log(
+    "📊 Daily total: 2:01 AM"
+  );
+
+  console.log(
+    "🌅 Morning report: 3:00 PM"
+  );
+
+  console.log(
+    "☀️ Day report: 9:00 PM"
+  );
+
+  console.log(
+    "🚫 15-minute scheduled check removed"
   );
 
 
-  // Check immediately after Render starts/restarts.
+  // ===================================================
+  // STARTUP RECOVERY
+  //
+  // Only runs when Contabo backend starts/restarts.
+  // It does NOT run every 15 minutes.
+  // ===================================================
+
   try {
+
     await recoverMissedShifts();
+
   } catch (error) {
+
     console.error(
       "❌ Initial recovery failed:",
       error.message
@@ -1437,6 +1626,7 @@ module.exports = {
 
   // Manual testing
   runNightShift,
+  runDailyTotal,
   runMorningShift,
   runDayShift,
 
