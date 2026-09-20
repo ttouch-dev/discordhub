@@ -1579,35 +1579,18 @@ async function handleOrderImages(message) {
     }
 
     const scanResults = [];
-
-    // IMPORTANT:
-    // Scan every attachment separately.
-    // No Set / deduplication is used.
-    // Same image / same TT repeated remains separate.
-    for (
-      let i = 0;
-      i < images.length;
-      i++
-    ) {
-      const image = images[i];
-
-      console.log(
-        `🔍 Scanning image ${i + 1}/${images.length}`
-      );
-
-      const result =
-        await scanProductImage(
-          image.url
-        );
-
-      scanResults.push({
-        filename:
-          image.name ||
-          `Image ${i + 1}`,
-
-        ...result,
-      });
+    const MAX_CONCURRENT_OCR = 2;
+    for (let start = 0; start < images.length; start += MAX_CONCURRENT_OCR) {
+      const batch = images.slice(start, start + MAX_CONCURRENT_OCR);
+      const batchResults = await Promise.all(batch.map(async (image, batchIndex) => {
+        const imageIndex = start + batchIndex;
+        console.log(`🔍 Scanning image ${imageIndex + 1}/${images.length}`);
+        const result = await scanProductImage(image.url);
+        return { imageIndex, filename: image.name || `Image ${imageIndex + 1}`, ...result };
+      }));
+      scanResults.push(...batchResults);
     }
+    scanResults.sort((a, b) => a.imageIndex - b.imageIndex);
 
     const failedTT =
       scanResults.filter(
@@ -1641,49 +1624,22 @@ async function handleOrderImages(message) {
       return;
     }
 
-    // One lookup/result per image.
-    // Same TT is intentionally NOT removed.
+    // One result per image. Cache lookup only; never deduplicate product instances.
     const productResults = [];
     const missingProducts = [];
-
-    for (
-      let i = 0;
-      i < scanResults.length;
-      i++
-    ) {
-      const code =
-        normalizeTTCode(
-          scanResults[i].ttCode
-        );
-
-      console.log(
-        `🔎 Product ${i + 1}/${scanResults.length}: looking up ${code}...`
-      );
-
-      const match =
-        await findPriceForTTCode(
-          code
-        );
-
-      if (!match) {
-        missingProducts.push({
-          imageNumber: i + 1,
-          code,
-        });
-
-        continue;
+    const priceCache = new Map();
+    for (let i = 0; i < scanResults.length; i++) {
+      const code = normalizeTTCode(scanResults[i].ttCode);
+      let match;
+      if (priceCache.has(code)) {
+        match = priceCache.get(code);
+        console.log(`⚡ Cached content price: ${code}`);
+      } else {
+        match = await findPriceForTTCode(code);
+        priceCache.set(code, match);
       }
-
-      // Push once PER IMAGE.
-      // Example:
-      // TT12896 image 1 -> 750
-      // TT12896 image 2 -> 750
-      // TT12896 image 3 -> 750
-      productResults.push({
-        imageNumber: i + 1,
-        code,
-        price: match.price,
-      });
+      if (!match) { missingProducts.push({ imageNumber: i + 1, code }); continue; }
+      productResults.push({ imageNumber: i + 1, code, price: match.price });
     }
 
     if (missingProducts.length) {
