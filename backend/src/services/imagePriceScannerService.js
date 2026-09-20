@@ -65,37 +65,81 @@ function normalizeOCRDigits(value = "") {
 function extractTTCode(text = "") {
   if (!text) return null;
 
-  let normalized = String(text)
+  const normalized = String(text)
     .toUpperCase()
     .replace(/\r/g, "\n")
-    .replace(/[ \t]+/g, " ")
+    .replace(/\s+/g, " ")
     .trim();
 
-  // Clean forms first.
-  const cleanPatterns = [
-    /DESIGN\s*CODE\s*[:=\-]?\s*TT\s*[-:]?\s*(\d{3,})/i,
-    /\bTT\s*[-:]?\s*(\d{3,})\b/i,
-    /\bT\s+T\s*[-:]?\s*(\d{3,})\b/i,
-    /\bT[\s._|:-]+T[\s._|:-]*(\d{3,})\b/i,
-  ];
-
-  for (const pattern of cleanPatterns) {
-    const match = normalized.match(pattern);
-    if (match) return `TT${match[1]}`;
-  }
-
-  // OCR-confused suffix. Corrections are applied ONLY after an explicit TT/T T prefix.
-  // Examples: TTI2896 -> TT12896, TTO1286 -> TT01286.
-  const confused = normalized.match(
-    /\bT[\s._|:-]*T[\s._|:-]*([0-9ILOQSBZG]{4,})\b/i
+  // 1. Correct OCR: TT + exactly 5 digits
+  let match = normalized.match(
+    /\bTT\s*[-:]?\s*(\d{5})\b/i
   );
 
-  if (confused) {
-    const digits = normalizeOCRDigits(confused[1]);
+  if (match) {
+    return `TT${match[1]}`;
+  }
 
-    if (/^\d{4,}$/.test(digits)) {
-      return `TT${digits}`;
-    }
+  // 2. OCR confusion:
+  // TT may be recognized as 11
+  // Example: 1113174 -> TT13174
+  match = normalized.match(
+    /\b11(\d{5})\b/
+  );
+
+  if (match) {
+    console.log(
+      `⚠️ OCR corrected 11${match[1]} -> TT${match[1]}`
+    );
+
+    return `TT${match[1]}`;
+  }
+
+  // 3. OCR confusion:
+  // TT may be recognized as 17
+  // Example: 1713174 -> TT13174
+  match = normalized.match(
+    /\b17(\d{5})\b/
+  );
+
+  if (match) {
+    console.log(
+      `⚠️ OCR corrected 17${match[1]} -> TT${match[1]}`
+    );
+
+    return `TT${match[1]}`;
+  }
+
+  // 4. Handle OCR noise before TT-like prefix.
+  // Example from your log:
+  // 17113174
+  //
+  // Last 7 digits = 1113174
+  // 11 -> TT
+  // 13174 -> product code
+  match = normalized.match(
+    /(?:^|\D)\d*11(\d{5})(?:\D|$)/
+  );
+
+  if (match) {
+    console.log(
+      `⚠️ OCR corrected noisy 11 -> TT${match[1]}`
+    );
+
+    return `TT${match[1]}`;
+  }
+
+  // 5. Same fallback for 17
+  match = normalized.match(
+    /(?:^|\D)\d*17(\d{5})(?:\D|$)/
+  );
+
+  if (match) {
+    console.log(
+      `⚠️ OCR corrected noisy 17 -> TT${match[1]}`
+    );
+
+    return `TT${match[1]}`;
   }
 
   return null;
