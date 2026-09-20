@@ -1579,18 +1579,32 @@ async function handleOrderImages(message) {
     }
 
     const scanResults = [];
-    const MAX_CONCURRENT_OCR = 2;
-    for (let start = 0; start < images.length; start += MAX_CONCURRENT_OCR) {
-      const batch = images.slice(start, start + MAX_CONCURRENT_OCR);
-      const batchResults = await Promise.all(batch.map(async (image, batchIndex) => {
-        const imageIndex = start + batchIndex;
-        console.log(`🔍 Scanning image ${imageIndex + 1}/${images.length}`);
-        const result = await scanProductImage(image.url);
-        return { imageIndex, filename: image.name || `Image ${imageIndex + 1}`, ...result };
-      }));
-      scanResults.push(...batchResults);
+
+    // =================================================
+    // SAFE OCR SCANNING
+    //
+    // The scanner uses one shared Tesseract worker, so recognize()
+    // calls are kept sequential. Every Discord attachment remains
+    // a separate product; duplicate TT codes are NOT removed.
+    // =================================================
+
+    for (let i = 0; i < images.length; i++) {
+      const image = images[i];
+
+      console.log(
+        `🔍 Scanning image ${i + 1}/${images.length}`
+      );
+
+      const result = await scanProductImage(image.url);
+
+      scanResults.push({
+        imageIndex: i,
+        filename:
+          image.name ||
+          `Image ${i + 1}`,
+        ...result,
+      });
     }
-    scanResults.sort((a, b) => a.imageIndex - b.imageIndex);
 
     const failedTT =
       scanResults.filter(

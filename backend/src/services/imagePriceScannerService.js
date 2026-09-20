@@ -10,20 +10,14 @@ let workerPromise = null;
 // =====================================================
 
 async function getWorker() {
-  if (worker) {
-    return worker;
-  }
+  if (worker) return worker;
 
   if (!workerPromise) {
     workerPromise = (async () => {
       console.log("🔍 Starting OCR worker...");
-
       const newWorker = await createWorker("eng");
-
       worker = newWorker;
-
       console.log("✅ OCR worker ready");
-
       return worker;
     })().catch((error) => {
       workerPromise = null;
@@ -52,13 +46,24 @@ async function downloadImage(url) {
 }
 
 // =====================================================
-// EXTRACT TT CODE
+// TT CODE EXTRACTION
 // =====================================================
 
+function normalizeOCRDigits(value = "") {
+  return String(value)
+    .toUpperCase()
+    .replace(/I/g, "1")
+    .replace(/L/g, "1")
+    .replace(/O/g, "0")
+    .replace(/Q/g, "0")
+    .replace(/S/g, "5")
+    .replace(/B/g, "8")
+    .replace(/Z/g, "2")
+    .replace(/G/g, "6");
+}
+
 function extractTTCode(text = "") {
-  if (!text) {
-    return null;
-  }
+  if (!text) return null;
 
   let normalized = String(text)
     .toUpperCase()
@@ -66,82 +71,27 @@ function extractTTCode(text = "") {
     .replace(/[ \t]+/g, " ")
     .trim();
 
-  // Example:
-  // T T 12896 -> TT12896
-  normalized = normalized.replace(
-    /\bT\s+T\s*[-:]?\s*(\d{3,})\b/gi,
-    "TT$1"
-  );
+  // Clean forms first.
+  const cleanPatterns = [
+    /DESIGN\s*CODE\s*[:=\-]?\s*TT\s*[-:]?\s*(\d{3,})/i,
+    /\bTT\s*[-:]?\s*(\d{3,})\b/i,
+    /\bT\s+T\s*[-:]?\s*(\d{3,})\b/i,
+    /\bT[\s._|:-]+T[\s._|:-]*(\d{3,})\b/i,
+  ];
 
-  // Example:
-  // T-T-12896
-  // T.T.12896
-  normalized = normalized.replace(
-    /\bT[\s._|-]+T[\s._|:-]*(\d{3,})\b/gi,
-    "TT$1"
-  );
-
-  // ---------------------------------------------------
-  // DESIGN CODE
-  // Example: Design Code: TT12896
-  // ---------------------------------------------------
-
-  let match = normalized.match(
-    /DESIGN\s*CODE\s*[:=\-]?\s*TT\s*[-:]?\s*(\d{3,})/i
-  );
-
-  if (match) {
-    return `TT${match[1]}`;
+  for (const pattern of cleanPatterns) {
+    const match = normalized.match(pattern);
+    if (match) return `TT${match[1]}`;
   }
 
-  // ---------------------------------------------------
-  // NORMAL TT
-  // Example:
-  // TT12896
-  // TT 12896
-  // TT-12896
-  // TT:12896
-  // ---------------------------------------------------
-
-  match = normalized.match(
-    /\bTT\s*[-:]?\s*(\d{3,})\b/i
+  // OCR-confused suffix. Corrections are applied ONLY after an explicit TT/T T prefix.
+  // Examples: TTI2896 -> TT12896, TTO1286 -> TT01286.
+  const confused = normalized.match(
+    /\bT[\s._|:-]*T[\s._|:-]*([0-9ILOQSBZG]{4,})\b/i
   );
 
-  if (match) {
-    return `TT${match[1]}`;
-  }
-
-  // ---------------------------------------------------
-  // SEPARATED TT
-  // Example: T T12896
-  // ---------------------------------------------------
-
-  match = normalized.match(
-    /\bT\s*T\s*(\d{3,})\b/i
-  );
-
-  if (match) {
-    return `TT${match[1]}`;
-  }
-
-  // ---------------------------------------------------
-  // OCR CONFUSION
-  //
-  // Sometimes:
-  // TTI2896
-  // TTL2896
-  //
-  // I/L -> 1
-  // ---------------------------------------------------
-
-  match = normalized.match(
-    /\bTT\s*[-:]?\s*([0-9IL]{4,})\b/i
-  );
-
-  if (match) {
-    const digits = match[1]
-      .replace(/I/g, "1")
-      .replace(/L/g, "1");
+  if (confused) {
+    const digits = normalizeOCRDigits(confused[1]);
 
     if (/^\d{4,}$/.test(digits)) {
       return `TT${digits}`;
@@ -152,16 +102,14 @@ function extractTTCode(text = "") {
 }
 
 // =====================================================
-// IMAGE DIMENSIONS
+// IMAGE HELPERS
 // =====================================================
 
 async function getDimensions(buffer) {
   const metadata = await sharp(buffer).metadata();
 
   if (!metadata.width || !metadata.height) {
-    throw new Error(
-      "Could not read image dimensions"
-    );
+    throw new Error("Could not read image dimensions");
   }
 
   return {
@@ -170,148 +118,89 @@ async function getDimensions(buffer) {
   };
 }
 
-// =====================================================
-// CREATE CROPPED OCR IMAGE
-// =====================================================
-
 async function createCrop(buffer, type) {
-  const {
-    width,
-    height,
-  } = await getDimensions(buffer);
+  const { width, height } = await getDimensions(buffer);
 
   let left;
   let top;
+  let cropWidth;
+  let cropHeight;
   let scale;
-
-  // ---------------------------------------------------
-  // FAST SCAN
-  // Bottom-right label area
-  // ---------------------------------------------------
+  let threshold = false;
 
   if (type === "tight") {
-    left = Math.floor(
-      width * 0.50
-    );
-
-    top = Math.floor(
-      height * 0.58
-    );
-
+    // Primary label area: right 50%, bottom 42%.
+    left = Math.floor(width * 0.50);
+    top = Math.floor(height * 0.58);
+    cropWidth = width - left;
+    cropHeight = height - top;
     scale = 4;
-  }
-
-  // ---------------------------------------------------
-  // FALLBACK
-  // Larger lower-right area
-  // ---------------------------------------------------
-
-  else if (type === "large") {
-    left = Math.floor(
-      width * 0.35
-    );
-
-    top = Math.floor(
-      height * 0.45
-    );
-
+  } else if (type === "large") {
+    // Wider fallback: right 65%, bottom 55%.
+    left = Math.floor(width * 0.35);
+    top = Math.floor(height * 0.45);
+    cropWidth = width - left;
+    cropHeight = height - top;
     scale = 3;
+  } else if (type === "bottom-threshold") {
+    // Difficult labels: full-width bottom 45% + threshold.
+    left = 0;
+    top = Math.floor(height * 0.55);
+    cropWidth = width;
+    cropHeight = height - top;
+    scale = 3;
+    threshold = true;
+  } else {
+    throw new Error(`Unknown crop type: ${type}`);
   }
 
-  else {
-    throw new Error(
-      `Unknown crop type: ${type}`
-    );
-  }
-
-  const cropWidth = Math.max(
-    1,
-    width - left
-  );
-
-  const cropHeight = Math.max(
-    1,
-    height - top
-  );
-
-  return sharp(buffer)
+  let pipeline = sharp(buffer)
     .extract({
       left,
       top,
-      width: cropWidth,
-      height: cropHeight,
+      width: Math.max(1, cropWidth),
+      height: Math.max(1, cropHeight),
     })
     .resize({
-      width: Math.min(
-        cropWidth * scale,
-        2500
-      ),
+      width: Math.min(Math.max(1, cropWidth) * scale, 2800),
       withoutEnlargement: false,
     })
     .grayscale()
     .normalize()
-    .sharpen({
-      sigma: 1.3,
-    })
-    .png()
-    .toBuffer();
+    .sharpen({ sigma: 1.4 });
+
+  if (threshold) {
+    pipeline = pipeline.threshold(165);
+  }
+
+  return pipeline.png().toBuffer();
 }
 
-// =====================================================
-// FULL IMAGE FALLBACK
-// =====================================================
-
 async function createFullImage(buffer) {
-  const {
-    width,
-  } = await getDimensions(buffer);
+  const { width } = await getDimensions(buffer);
 
   return sharp(buffer)
     .resize({
-      width: Math.min(
-        Math.max(width, 1400),
-        2200
-      ),
+      width: Math.min(Math.max(width, 1500), 2400),
       withoutEnlargement: false,
       fit: "inside",
     })
     .grayscale()
     .normalize()
-    .sharpen()
+    .sharpen({ sigma: 1.2 })
     .png()
     .toBuffer();
 }
 
-// =====================================================
-// OCR RECOGNITION
-// =====================================================
+async function recognizeImage(ocrWorker, buffer, name) {
+  console.log(`🔍 OCR scanning: ${name}`);
 
-async function recognizeImage(
-  ocrWorker,
-  buffer,
-  name
-) {
-  console.log(
-    `🔍 OCR scanning: ${name}`
-  );
+  const result = await ocrWorker.recognize(buffer);
+  const text = result?.data?.text || "";
 
-  const result =
-    await ocrWorker.recognize(
-      buffer
-    );
-
-  const text =
-    result?.data?.text || "";
-
-  console.log(
-    `========== OCR ${name.toUpperCase()} ==========`
-  );
-
+  console.log(`========== OCR ${name.toUpperCase()} ==========`);
   console.log(text);
-
-  console.log(
-    "=========================================="
-  );
+  console.log("==========================================");
 
   return text;
 }
@@ -319,14 +208,13 @@ async function recognizeImage(
 // =====================================================
 // SCAN PRODUCT IMAGE
 //
-// Attempt 1:
-// Bottom-right
+// Progressive fallback:
+// 1. Tight bottom-right
+// 2. Larger lower-right
+// 3. Bottom 45% with threshold
+// 4. Full image
 //
-// Attempt 2:
-// Larger lower-right
-//
-// Attempt 3:
-// Full image
+// Later attempts run ONLY if earlier attempts fail.
 // =====================================================
 
 async function scanProductImage(imageUrl) {
@@ -334,187 +222,62 @@ async function scanProductImage(imageUrl) {
 
   try {
     if (!imageUrl) {
-      throw new Error(
-        "Image URL is required"
-      );
+      throw new Error("Image URL is required");
     }
 
-    const ocrWorker =
-      await getWorker();
-
-    const originalBuffer =
-      await downloadImage(
-        imageUrl
-      );
-
+    const ocrWorker = await getWorker();
+    const originalBuffer = await downloadImage(imageUrl);
     let allText = "";
 
-    // =================================================
-    // ATTEMPT 1
-    // FAST BOTTOM-RIGHT
-    // =================================================
+    const attempts = [
+      {
+        name: "bottom-right",
+        build: () => createCrop(originalBuffer, "tight"),
+      },
+      {
+        name: "lower-right",
+        build: () => createCrop(originalBuffer, "large"),
+      },
+      {
+        name: "bottom-threshold",
+        build: () => createCrop(originalBuffer, "bottom-threshold"),
+      },
+      {
+        name: "full",
+        build: () => createFullImage(originalBuffer),
+      },
+    ];
 
-    try {
-      const croppedImage =
-        await createCrop(
-          originalBuffer,
-          "tight"
-        );
+    for (const attempt of attempts) {
+      try {
+        const target = await attempt.build();
+        const text = await recognizeImage(ocrWorker, target, attempt.name);
+        allText += `\n${text}`;
 
-      const text =
-        await recognizeImage(
-          ocrWorker,
-          croppedImage,
-          "bottom-right"
-        );
+        const ttCode = extractTTCode(text);
 
-      allText += `\n${text}`;
+        if (ttCode) {
+          console.log(`🏷️ TT detected: ${ttCode}`);
+          console.log(`⚡ OCR time: ${Date.now() - startedAt}ms`);
 
-      const ttCode =
-        extractTTCode(
-          text
-        );
-
-      if (ttCode) {
+          return {
+            success: true,
+            ttCode,
+            rawText: allText,
+          };
+        }
+      } catch (error) {
         console.log(
-          `🏷️ TT detected: ${ttCode}`
+          `⚠️ ${attempt.name} OCR failed:`,
+          error.message
         );
-
-        console.log(
-          `⚡ OCR time: ${
-            Date.now() - startedAt
-          }ms`
-        );
-
-        return {
-          success: true,
-          ttCode,
-          rawText: allText,
-        };
       }
-    } catch (error) {
-      console.log(
-        "⚠️ Bottom-right OCR failed:",
-        error.message
-      );
     }
 
-    // =================================================
-    // ATTEMPT 2
-    // LARGE LOWER-RIGHT
-    // =================================================
-
-    try {
-      const croppedImage =
-        await createCrop(
-          originalBuffer,
-          "large"
-        );
-
-      const text =
-        await recognizeImage(
-          ocrWorker,
-          croppedImage,
-          "lower-right"
-        );
-
-      allText += `\n${text}`;
-
-      const ttCode =
-        extractTTCode(
-          text
-        );
-
-      if (ttCode) {
-        console.log(
-          `🏷️ TT detected: ${ttCode}`
-        );
-
-        console.log(
-          `⚡ OCR time: ${
-            Date.now() - startedAt
-          }ms`
-        );
-
-        return {
-          success: true,
-          ttCode,
-          rawText: allText,
-        };
-      }
-    } catch (error) {
-      console.log(
-        "⚠️ Lower-right OCR failed:",
-        error.message
-      );
-    }
-
-    // =================================================
-    // ATTEMPT 3
-    // FULL IMAGE FALLBACK
-    // =================================================
-
-    try {
-      console.log(
-        "🔄 Trying full image fallback..."
-      );
-
-      const fullImage =
-        await createFullImage(
-          originalBuffer
-        );
-
-      const text =
-        await recognizeImage(
-          ocrWorker,
-          fullImage,
-          "full"
-        );
-
-      allText += `\n${text}`;
-
-      const ttCode =
-        extractTTCode(
-          text
-        );
-
-      if (ttCode) {
-        console.log(
-          `🏷️ TT detected: ${ttCode}`
-        );
-
-        console.log(
-          `⚡ OCR time: ${
-            Date.now() - startedAt
-          }ms`
-        );
-
-        return {
-          success: true,
-          ttCode,
-          rawText: allText,
-        };
-      }
-    } catch (error) {
-      console.log(
-        "⚠️ Full image OCR failed:",
-        error.message
-      );
-    }
-
-    // =================================================
-    // FINAL COMBINED CHECK
-    // =================================================
-
-    const finalTTCode =
-      extractTTCode(
-        allText
-      );
+    const finalTTCode = extractTTCode(allText);
 
     if (finalTTCode) {
-      console.log(
-        `🏷️ TT detected from combined OCR: ${finalTTCode}`
-      );
+      console.log(`🏷️ TT detected from combined OCR: ${finalTTCode}`);
 
       return {
         success: true,
@@ -523,19 +286,8 @@ async function scanProductImage(imageUrl) {
       };
     }
 
-    // =================================================
-    // FAILED
-    // =================================================
-
-    console.log(
-      "❌ TT Code not detected"
-    );
-
-    console.log(
-      `⏱️ OCR failed after ${
-        Date.now() - startedAt
-      }ms`
-    );
+    console.log("❌ TT Code not detected");
+    console.log(`⏱️ OCR failed after ${Date.now() - startedAt}ms`);
 
     return {
       success: false,
@@ -543,10 +295,7 @@ async function scanProductImage(imageUrl) {
       rawText: allText,
     };
   } catch (error) {
-    console.error(
-      "❌ OCR error:",
-      error.message
-    );
+    console.error("❌ OCR error:", error.message);
 
     return {
       success: false,
@@ -556,10 +305,6 @@ async function scanProductImage(imageUrl) {
     };
   }
 }
-
-// =====================================================
-// EXPORT
-// =====================================================
 
 module.exports = {
   scanProductImage,
