@@ -10,15 +10,25 @@ let workerPromise = null;
 // =====================================================
 
 async function getWorker() {
-  if (worker) {
-    return worker;
-  }
+  if (worker) return worker;
 
   if (!workerPromise) {
     workerPromise = (async () => {
       console.log("🔍 Starting OCR worker...");
 
       const newWorker = await createWorker("eng");
+
+      // Focus OCR more on sparse/small text.
+      try {
+        await newWorker.setParameters({
+          tessedit_pageseg_mode: "11",
+        });
+      } catch (error) {
+        console.log(
+          "⚠️ Could not set OCR parameters:",
+          error.message
+        );
+      }
 
       worker = newWorker;
 
@@ -71,24 +81,26 @@ function normalizeOCRDigits(value = "") {
 // =====================================================
 // TT CODE EXTRACTION
 //
-// VALID:
+// VALID CODE:
+// TT + EXACTLY 5 DIGITS
+//
+// Examples:
 // TT13259
 // TT13258
 // TT12868
 // TT13174
 //
-// Rule:
-// TT + exactly 5 digits
+// Handles OCR problems:
 //
-// OCR confusion supported:
-// TT13174 -> 1113174
-// TT13174 -> 1713174
+// TT13174  -> normal
+// 1113174  -> TT13174
+// 1713174  -> TT13174
+// TT712868 -> TT12868
+// TTI2868  -> TT12868
 // =====================================================
 
 function extractTTCode(text = "") {
-  if (!text) {
-    return null;
-  }
+  if (!text) return null;
 
   const normalized = String(text)
     .toUpperCase()
@@ -96,14 +108,9 @@ function extractTTCode(text = "") {
     .replace(/\s+/g, " ")
     .trim();
 
-  // ---------------------------------------------------
+  // ===================================================
   // 1. NORMAL TT + EXACTLY 5 DIGITS
-  //
-  // TT13174
-  // TT 13174
-  // TT-13174
-  // TT:13174
-  // ---------------------------------------------------
+  // ===================================================
 
   let match = normalized.match(
     /\bTT\s*[-:]?\s*(\d{5})\b/i
@@ -112,18 +119,14 @@ function extractTTCode(text = "") {
   if (match) {
     const code = `TT${match[1]}`;
 
-    console.log(
-      `✅ Normal TT detected: ${code}`
-    );
+    console.log(`✅ Normal TT detected: ${code}`);
 
     return code;
   }
 
-  // ---------------------------------------------------
+  // ===================================================
   // 2. DESIGN CODE
-  //
-  // Design Code: TT13174
-  // ---------------------------------------------------
+  // ===================================================
 
   match = normalized.match(
     /DESIGN\s*CODE\s*[:=\-]?\s*TT\s*[-:]?\s*(\d{5})\b/i
@@ -132,20 +135,18 @@ function extractTTCode(text = "") {
   if (match) {
     const code = `TT${match[1]}`;
 
-    console.log(
-      `✅ Design Code detected: ${code}`
-    );
+    console.log(`✅ Design Code detected: ${code}`);
 
     return code;
   }
 
-  // ---------------------------------------------------
-  // 3. SEPARATED T T
+  // ===================================================
+  // 3. SEPARATED TT
   //
-  // T T 13174
-  // T-T-13174
-  // T.T.13174
-  // ---------------------------------------------------
+  // T T 12868
+  // T-T-12868
+  // T.T.12868
+  // ===================================================
 
   match = normalized.match(
     /\bT[\s._|:-]+T[\s._|:-]*(\d{5})\b/i
@@ -154,24 +155,42 @@ function extractTTCode(text = "") {
   if (match) {
     const code = `TT${match[1]}`;
 
+    console.log(`✅ Separated TT detected: ${code}`);
+
+    return code;
+  }
+
+  // ===================================================
+  // 4. TT + ONE EXTRA OCR DIGIT
+  //
+  // Actual:
+  // TT12868
+  //
+  // OCR:
+  // TT712868
+  //
+  // Remove the accidental first digit after TT.
+  // ===================================================
+
+  match = normalized.match(
+    /\bTT\s*[-:]?\s*\d(\d{5})\b/i
+  );
+
+  if (match) {
+    const code = `TT${match[1]}`;
+
     console.log(
-      `✅ Separated TT detected: ${code}`
+      `⚠️ OCR extra digit removed -> ${code}`
     );
 
     return code;
   }
 
-  // ---------------------------------------------------
-  // 4. OCR CONFUSION
+  // ===================================================
+  // 5. TT READ AS 11
   //
-  // TT may become 11
-  //
-  // Actual:
-  // TT13174
-  //
-  // OCR:
-  // 1113174
-  // ---------------------------------------------------
+  // 1113174 -> TT13174
+  // ===================================================
 
   match = normalized.match(
     /\b11(\d{5})\b/
@@ -187,17 +206,11 @@ function extractTTCode(text = "") {
     return code;
   }
 
-  // ---------------------------------------------------
-  // 5. OCR CONFUSION
+  // ===================================================
+  // 6. TT READ AS 17
   //
-  // TT may become 17
-  //
-  // Actual:
-  // TT13174
-  //
-  // OCR:
-  // 1713174
-  // ---------------------------------------------------
+  // 1713174 -> TT13174
+  // ===================================================
 
   match = normalized.match(
     /\b17(\d{5})\b/
@@ -213,18 +226,15 @@ function extractTTCode(text = "") {
     return code;
   }
 
-  // ---------------------------------------------------
-  // 6. OCR NOISE BEFORE 11
+  // ===================================================
+  // 7. NOISY 11
   //
   // Example:
   // 17113174
   //
-  // Find final:
+  // Find:
   // 11 + 13174
-  //
-  // Result:
-  // TT13174
-  // ---------------------------------------------------
+  // ===================================================
 
   match = normalized.match(
     /(?:^|\D)\d*11(\d{5})(?:\D|$)/
@@ -240,9 +250,9 @@ function extractTTCode(text = "") {
     return code;
   }
 
-  // ---------------------------------------------------
-  // 7. OCR NOISE BEFORE 17
-  // ---------------------------------------------------
+  // ===================================================
+  // 8. NOISY 17
+  // ===================================================
 
   match = normalized.match(
     /(?:^|\D)\d*17(\d{5})(?:\D|$)/
@@ -258,35 +268,29 @@ function extractTTCode(text = "") {
     return code;
   }
 
-  // ---------------------------------------------------
-  // 8. TT + OCR CONFUSED DIGITS
+  // ===================================================
+  // 9. OCR CONFUSED DIGITS AFTER TT
+  //
+  // I/L -> 1
+  // O/Q -> 0
+  // S   -> 5
+  // B   -> 8
+  // Z   -> 2
+  // G   -> 6
   //
   // Example:
-  // TTI3I74
-  //
-  // I -> 1
-  // L -> 1
-  // O -> 0
-  // Q -> 0
-  // S -> 5
-  // B -> 8
-  // Z -> 2
-  // G -> 6
-  // ---------------------------------------------------
+  // TTI2868 -> TT12868
+  // ===================================================
 
   match = normalized.match(
     /\bTT\s*[-:]?\s*([0-9ILOQSBZG]{5})\b/i
   );
 
   if (match) {
-    const digits =
-      normalizeOCRDigits(
-        match[1]
-      );
+    const digits = normalizeOCRDigits(match[1]);
 
     if (/^\d{5}$/.test(digits)) {
-      const code =
-        `TT${digits}`;
+      const code = `TT${digits}`;
 
       console.log(
         `⚠️ OCR digit correction -> ${code}`
@@ -300,17 +304,13 @@ function extractTTCode(text = "") {
 }
 
 // =====================================================
-// GET IMAGE DIMENSIONS
+// IMAGE DIMENSIONS
 // =====================================================
 
 async function getDimensions(buffer) {
-  const metadata =
-    await sharp(buffer).metadata();
+  const metadata = await sharp(buffer).metadata();
 
-  if (
-    !metadata.width ||
-    !metadata.height
-  ) {
+  if (!metadata.width || !metadata.height) {
     throw new Error(
       "Could not read image dimensions"
     );
@@ -323,149 +323,171 @@ async function getDimensions(buffer) {
 }
 
 // =====================================================
+// SAFE CROP
+// =====================================================
+
+function clampCrop(
+  width,
+  height,
+  left,
+  top,
+  cropWidth,
+  cropHeight
+) {
+  left = Math.max(
+    0,
+    Math.min(left, width - 1)
+  );
+
+  top = Math.max(
+    0,
+    Math.min(top, height - 1)
+  );
+
+  cropWidth = Math.max(
+    1,
+    Math.min(cropWidth, width - left)
+  );
+
+  cropHeight = Math.max(
+    1,
+    Math.min(cropHeight, height - top)
+  );
+
+  return {
+    left,
+    top,
+    width: cropWidth,
+    height: cropHeight,
+  };
+}
+
+// =====================================================
 // CREATE OCR CROP
 // =====================================================
 
-async function createCrop(
-  buffer,
-  type
-) {
+async function createCrop(buffer, type) {
   const {
     width,
     height,
-  } = await getDimensions(
-    buffer
-  );
+  } = await getDimensions(buffer);
 
   let left;
   let top;
   let cropWidth;
   let cropHeight;
-  let scale;
+
+  let scale = 1;
   let threshold = false;
   let invert = false;
 
   // ===================================================
-  // 1. EXTREME BOTTOM-RIGHT
+  // 1. LABEL TEXT
   //
-  // Primary TT label location.
+  // Highest priority.
   //
-  // Small crop = less dress/background noise.
+  // Focus mainly on the TT text under barcode.
+  // Avoid most of the dress/background.
   // ===================================================
 
-  if (type === "tight") {
-    left = Math.floor(
-      width * 0.68
-    );
+  if (type === "label-text") {
+    left = Math.floor(width * 0.62);
+    top = Math.floor(height * 0.84);
 
-    top = Math.floor(
-      height * 0.78
-    );
+    cropWidth = Math.floor(width * 0.37);
+    cropHeight = Math.floor(height * 0.15);
 
-    cropWidth =
-      width - left;
-
-    cropHeight =
-      height - top;
-
-    scale = 7;
+    scale = 10;
   }
 
   // ===================================================
-  // 2. LARGER BOTTOM-RIGHT
+  // 2. LABEL TEXT THRESHOLD
   // ===================================================
 
-  else if (type === "large") {
-    left = Math.floor(
-      width * 0.50
-    );
+  else if (type === "label-text-threshold") {
+    left = Math.floor(width * 0.62);
+    top = Math.floor(height * 0.84);
 
-    top = Math.floor(
-      height * 0.65
-    );
+    cropWidth = Math.floor(width * 0.37);
+    cropHeight = Math.floor(height * 0.15);
 
-    cropWidth =
-      width - left;
-
-    cropHeight =
-      height - top;
-
-    scale = 5;
-  }
-
-  // ===================================================
-  // 3. EXTREME BOTTOM-RIGHT THRESHOLD
-  // ===================================================
-
-  else if (
-    type === "tight-threshold"
-  ) {
-    left = Math.floor(
-      width * 0.68
-    );
-
-    top = Math.floor(
-      height * 0.78
-    );
-
-    cropWidth =
-      width - left;
-
-    cropHeight =
-      height - top;
-
-    scale = 7;
-
+    scale = 10;
     threshold = true;
   }
 
   // ===================================================
-  // 4. EXTREME BOTTOM-RIGHT INVERT
+  // 3. BARCODE + TT LABEL
+  //
+  // Slightly larger area.
   // ===================================================
 
-  else if (
-    type === "tight-invert"
-  ) {
-    left = Math.floor(
-      width * 0.68
-    );
+  else if (type === "tight") {
+    left = Math.floor(width * 0.60);
+    top = Math.floor(height * 0.74);
 
-    top = Math.floor(
-      height * 0.78
-    );
+    cropWidth = Math.floor(width * 0.39);
+    cropHeight = Math.floor(height * 0.25);
 
-    cropWidth =
-      width - left;
+    scale = 8;
+  }
 
-    cropHeight =
-      height - top;
+  // ===================================================
+  // 4. BARCODE + LABEL THRESHOLD
+  // ===================================================
 
-    scale = 7;
+  else if (type === "tight-threshold") {
+    left = Math.floor(width * 0.60);
+    top = Math.floor(height * 0.74);
 
+    cropWidth = Math.floor(width * 0.39);
+    cropHeight = Math.floor(height * 0.25);
+
+    scale = 8;
+    threshold = true;
+  }
+
+  // ===================================================
+  // 5. BARCODE + LABEL INVERT
+  // ===================================================
+
+  else if (type === "tight-invert") {
+    left = Math.floor(width * 0.60);
+    top = Math.floor(height * 0.74);
+
+    cropWidth = Math.floor(width * 0.39);
+    cropHeight = Math.floor(height * 0.25);
+
+    scale = 8;
     threshold = true;
     invert = true;
   }
 
   // ===================================================
-  // 5. FULL BOTTOM AREA
+  // 6. LARGER LOWER-RIGHT
   // ===================================================
 
-  else if (
-    type === "bottom-threshold"
-  ) {
-    left = 0;
+  else if (type === "large") {
+    left = Math.floor(width * 0.45);
+    top = Math.floor(height * 0.60);
 
-    top = Math.floor(
-      height * 0.65
-    );
+    cropWidth = width - left;
+    cropHeight = height - top;
+
+    scale = 5;
+  }
+
+  // ===================================================
+  // 7. BOTTOM AREA
+  // ===================================================
+
+  else if (type === "bottom-threshold") {
+    left = 0;
+    top = Math.floor(height * 0.60);
 
     cropWidth = width;
-
-    cropHeight =
-      height - top;
+    cropHeight = height - top;
 
     scale = 3;
-
     threshold = true;
   }
 
@@ -475,26 +497,20 @@ async function createCrop(
     );
   }
 
-  cropWidth = Math.max(
-    1,
-    cropWidth
-  );
-
-  cropHeight = Math.max(
-    1,
+  const crop = clampCrop(
+    width,
+    height,
+    left,
+    top,
+    cropWidth,
     cropHeight
   );
 
   let pipeline = sharp(buffer)
-    .extract({
-      left,
-      top,
-      width: cropWidth,
-      height: cropHeight,
-    })
+    .extract(crop)
     .resize({
       width: Math.min(
-        cropWidth * scale,
+        crop.width * scale,
         3500
       ),
       withoutEnlargement: false,
@@ -502,17 +518,15 @@ async function createCrop(
     .grayscale()
     .normalize()
     .sharpen({
-      sigma: 1.4,
+      sigma: 1.5,
     });
 
   if (threshold) {
-    pipeline =
-      pipeline.threshold(165);
+    pipeline = pipeline.threshold(165);
   }
 
   if (invert) {
-    pipeline =
-      pipeline.negate();
+    pipeline = pipeline.negate();
   }
 
   return pipeline
@@ -524,23 +538,16 @@ async function createCrop(
 // FULL IMAGE FALLBACK
 // =====================================================
 
-async function createFullImage(
-  buffer
-) {
+async function createFullImage(buffer) {
   const {
     width,
-  } = await getDimensions(
-    buffer
-  );
+  } = await getDimensions(buffer);
 
   return sharp(buffer)
     .resize({
       width: Math.min(
-        Math.max(
-          width,
-          1500
-        ),
-        2400
+        Math.max(width, 1600),
+        2600
       ),
       withoutEnlargement: false,
       fit: "inside",
@@ -555,7 +562,7 @@ async function createFullImage(
 }
 
 // =====================================================
-// OCR RECOGNITION
+// OCR
 // =====================================================
 
 async function recognizeImage(
@@ -568,9 +575,7 @@ async function recognizeImage(
   );
 
   const result =
-    await ocrWorker.recognize(
-      buffer
-    );
+    await ocrWorker.recognize(buffer);
 
   const text =
     result?.data?.text || "";
@@ -591,25 +596,22 @@ async function recognizeImage(
 // =====================================================
 // SCAN PRODUCT IMAGE
 //
-// FAST FLOW:
+// ORDER:
 //
-// 1. Extreme bottom-right
-// 2. Larger bottom-right
-// 3. Tight threshold
-// 4. Tight inverted threshold
-// 5. Bottom threshold
-// 6. Full image
+// 1. Label text
+// 2. Label text threshold
+// 3. Barcode + label
+// 4. Barcode + label threshold
+// 5. Barcode + label invert
+// 6. Larger lower-right
+// 7. Bottom threshold
+// 8. Full image
 //
-// IMPORTANT:
-// As soon as TT is detected,
-// remaining OCR attempts stop.
+// Stops immediately when TT is detected.
 // =====================================================
 
-async function scanProductImage(
-  imageUrl
-) {
-  const startedAt =
-    Date.now();
+async function scanProductImage(imageUrl) {
+  const startedAt = Date.now();
 
   try {
     if (!imageUrl) {
@@ -622,17 +624,31 @@ async function scanProductImage(
       await getWorker();
 
     const originalBuffer =
-      await downloadImage(
-        imageUrl
-      );
+      await downloadImage(imageUrl);
 
     let allText = "";
 
     const attempts = [
       {
-        name:
-          "tight-bottom-right",
+        name: "label-text",
+        build: () =>
+          createCrop(
+            originalBuffer,
+            "label-text"
+          ),
+      },
 
+      {
+        name: "label-text-threshold",
+        build: () =>
+          createCrop(
+            originalBuffer,
+            "label-text-threshold"
+          ),
+      },
+
+      {
+        name: "barcode-label",
         build: () =>
           createCrop(
             originalBuffer,
@@ -641,20 +657,7 @@ async function scanProductImage(
       },
 
       {
-        name:
-          "large-bottom-right",
-
-        build: () =>
-          createCrop(
-            originalBuffer,
-            "large"
-          ),
-      },
-
-      {
-        name:
-          "tight-threshold",
-
+        name: "barcode-label-threshold",
         build: () =>
           createCrop(
             originalBuffer,
@@ -663,9 +666,7 @@ async function scanProductImage(
       },
 
       {
-        name:
-          "tight-invert",
-
+        name: "barcode-label-invert",
         build: () =>
           createCrop(
             originalBuffer,
@@ -674,9 +675,16 @@ async function scanProductImage(
       },
 
       {
-        name:
-          "bottom-threshold",
+        name: "large-bottom-right",
+        build: () =>
+          createCrop(
+            originalBuffer,
+            "large"
+          ),
+      },
 
+      {
+        name: "bottom-threshold",
         build: () =>
           createCrop(
             originalBuffer,
@@ -686,7 +694,6 @@ async function scanProductImage(
 
       {
         name: "full",
-
         build: () =>
           createFullImage(
             originalBuffer
@@ -694,13 +701,7 @@ async function scanProductImage(
       },
     ];
 
-    // =================================================
-    // OCR ATTEMPTS
-    // =================================================
-
-    for (
-      const attempt of attempts
-    ) {
+    for (const attempt of attempts) {
       try {
         const target =
           await attempt.build();
@@ -712,18 +713,14 @@ async function scanProductImage(
             attempt.name
           );
 
-        allText +=
-          `\n${text}`;
+        allText += `\n${text}`;
 
         const ttCode =
-          extractTTCode(
-            text
-          );
+          extractTTCode(text);
 
         if (ttCode) {
           const duration =
-            Date.now() -
-            startedAt;
+            Date.now() - startedAt;
 
           console.log(
             `🏷️ TT detected: ${ttCode}`
@@ -736,8 +733,7 @@ async function scanProductImage(
           return {
             success: true,
             ttCode,
-            rawText:
-              allText,
+            rawText: allText,
             duration,
           };
         }
@@ -750,18 +746,15 @@ async function scanProductImage(
     }
 
     // =================================================
-    // COMBINED OCR TEXT CHECK
+    // FINAL COMBINED CHECK
     // =================================================
 
     const finalTTCode =
-      extractTTCode(
-        allText
-      );
+      extractTTCode(allText);
 
     if (finalTTCode) {
       const duration =
-        Date.now() -
-        startedAt;
+        Date.now() - startedAt;
 
       console.log(
         `🏷️ TT detected from combined OCR: ${finalTTCode}`
@@ -773,10 +766,8 @@ async function scanProductImage(
 
       return {
         success: true,
-        ttCode:
-          finalTTCode,
-        rawText:
-          allText,
+        ttCode: finalTTCode,
+        rawText: allText,
         duration,
       };
     }
@@ -786,8 +777,7 @@ async function scanProductImage(
     // =================================================
 
     const duration =
-      Date.now() -
-      startedAt;
+      Date.now() - startedAt;
 
     console.log(
       "❌ TT Code not detected"
@@ -800,8 +790,7 @@ async function scanProductImage(
     return {
       success: false,
       ttCode: null,
-      rawText:
-        allText,
+      rawText: allText,
       duration,
     };
   } catch (error) {
@@ -814,8 +803,7 @@ async function scanProductImage(
       success: false,
       ttCode: null,
       rawText: "",
-      error:
-        error.message,
+      error: error.message,
     };
   }
 }
