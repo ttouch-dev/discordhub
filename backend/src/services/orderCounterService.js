@@ -7,6 +7,10 @@ const axios = require("axios");
 const cron = require("node-cron");
 const mongoose = require("mongoose");
 
+const {
+  scanProductImage,
+} = require("./imagePriceScannerService");
+
 // =====================================================
 // CONFIGURATION
 // =====================================================
@@ -15,6 +19,12 @@ const BD_TIMEZONE = "Asia/Dhaka";
 
 const SOURCE_CHANNEL_ID =
   process.env.SOURCE_CHANNEL_ID;
+
+const PRICE_TEST_CHANNEL_ID =
+  process.env.PRICE_TEST_CHANNEL_ID;
+
+const CONTENT_CHANNEL_ID =
+  process.env.CONTENT_CHANNEL_ID || "1243438005444677735";
 
 const DESTINATION_WEBHOOK_URL =
   process.env.DESTINATION_WEBHOOK_URL;
@@ -1314,6 +1324,465 @@ async function waitForDiscordReady() {
 
 
 // =====================================================
+// IMAGE TT SCANNER + CONTENT CHANNEL PRICE LOOKUP + COD
+//
+// NEW FEATURE ONLY.
+// Existing order counter / shift / daily total logic is unchanged.
+//
+// PRICE_TEST_CHANNEL_ID:
+//   Receives order/product images.
+//   Every attached image is treated as a separate product.
+//   Same image / same TT repeated = separate price value.
+//
+// CONTENT_CHANNEL_ID:
+//   Product content channel. Bot searches for matching TT code
+//   and reads Price from that message content.
+//
+// ORDER MESSAGE:
+//   DC / dc / Dc / dC is read from the order message.
+//   Bot reply contains ONLY:
+//   Price: ...
+//   COD: product total + DC
+// =====================================================
+
+const processingImageMessages = new Set();
+
+function isImageAttachment(attachment) {
+  if (attachment.contentType?.startsWith("image/")) {
+    return true;
+  }
+
+  const filename = attachment.name?.toLowerCase() || "";
+
+  return /\.(jpg|jpeg|png|webp|bmp|tif|tiff)$/i.test(filename);
+}
+
+function normalizeTTCode(code = "") {
+  const match = String(code).match(/TT\s*[-:]?\s*(\d{3,})/i);
+  return match ? `TT${match[1]}` : null;
+}
+
+function extractPricesFromContent(content = "") {
+  const prices = [];
+  const regex =
+    /(?:^|\n)\s*price\s*[:=\-]?\s*(?:tk\.?|bdt|৳)?\s*([\d,]+(?:\s*\+\s*[\d,]+)*)/gi;
+
+  let match;
+
+  while ((match = regex.exec(content)) !== null) {
+    const values = match[1]
+      .split("+")
+      .map((value) =>
+        Number(value.replace(/,/g, "").trim())
+      )
+      .filter(Number.isFinite);
+
+    prices.push(...values);
+  }
+
+  return prices;
+}
+
+function extractDeliveryCharge(content = "") {
+  const match = String(content).match(
+    /(?:^|\n)\s*dc\s*[:=\-]?\s*(?:tk\.?|bdt|৳)?\s*([\d,]+(?:\.\d+)?)/i
+  );
+
+  if (!match) {
+    return 0;
+  }
+
+  const value = Number(
+    match[1].replace(/,/g, "")
+  );
+
+  return Number.isFinite(value) ? value : 0;
+}
+
+function messageContainsTTCode(content = "", ttCode) {
+  const wanted = normalizeTTCode(ttCode);
+
+  if (!wanted) {
+    return false;
+  }
+
+  const compact = String(content)
+    .toUpperCase()
+    .replace(/[\s\-:]/g, "");
+
+  return compact.includes(wanted);
+}
+
+async function findPriceForTTCode(ttCode) {
+  if (!CONTENT_CHANNEL_ID) {
+    throw new Error("CONTENT_CHANNEL_ID missing");
+  }
+
+  const channel =
+    await discordClient.channels.fetch(
+      CONTENT_CHANNEL_ID
+    );
+
+  if (!channel || !channel.isTextBased()) {
+    throw new Error(
+      "Content Discord channel is invalid"
+    );
+  }
+
+  // Newest matching product content wins.
+  // This is separate from daily order counting.
+  let before;
+  const maxPages = 20; // up to 2,000 recent messages
+
+  for (
+    let page = 0;
+    page < maxPages;
+    page++
+  ) {
+    const options = {
+      limit: 100,
+    };
+
+    if (before) {
+      options.before = before;
+    }
+
+    const messages =
+      await channel.messages.fetch(
+        options
+      );
+
+    if (!messages.size) {
+      break;
+    }
+
+    const sorted =
+      [...messages.values()].sort(
+        (a, b) =>
+          b.createdTimestamp -
+          a.createdTimestamp
+      );
+
+    for (
+      const contentMessage of sorted
+    ) {
+      if (
+        !messageContainsTTCode(
+          contentMessage.content,
+          ttCode
+        )
+      ) {
+        continue;
+      }
+
+      const prices =
+        extractPricesFromContent(
+          contentMessage.content
+        );
+
+      if (prices.length) {
+        // One image represents one product.
+        // If a product content message has multiple price values,
+        // use the first price for this product image.
+        const price = prices[0];
+
+        console.log(
+          `✅ Content match: ${ttCode} -> ${price} (message ${contentMessage.id})`
+        );
+
+        return {
+          ttCode:
+            normalizeTTCode(ttCode),
+
+          price,
+
+          messageId:
+            contentMessage.id,
+        };
+      }
+    }
+
+    const oldest =
+      sorted[sorted.length - 1];
+
+    before = oldest?.id;
+
+    if (
+      !before ||
+      messages.size < 100
+    ) {
+      break;
+    }
+  }
+
+  return null;
+}
+
+async function handleOrderImages(message) {
+  // Never process bot messages/replies.
+  if (message.author?.bot) {
+    return;
+  }
+
+  // New price/COD feature runs ONLY in test/image channel.
+  // SOURCE_CHANNEL_ID daily counting remains untouched.
+  if (
+    message.channel.id !==
+    PRICE_TEST_CHANNEL_ID
+  ) {
+    return;
+  }
+
+  if (
+    processingImageMessages.has(
+      message.id
+    )
+  ) {
+    return;
+  }
+
+  const images =
+    [...message.attachments.values()]
+      .filter(
+        isImageAttachment
+      );
+
+  if (!images.length) {
+    return;
+  }
+
+  processingImageMessages.add(
+    message.id
+  );
+
+  console.log("");
+  console.log(
+    "======================================"
+  );
+  console.log(
+    `📷 New product images: ${images.length}`
+  );
+  console.log(
+    `👤 Moderator: ${message.author.tag}`
+  );
+  console.log(
+    "======================================"
+  );
+
+  try {
+    try {
+      await message.react("🔍");
+    } catch (error) {
+      console.log(
+        "⚠️ Could not add OCR reaction"
+      );
+    }
+
+    const scanResults = [];
+
+    // IMPORTANT:
+    // Scan every attachment separately.
+    // No Set / deduplication is used.
+    // Same image / same TT repeated remains separate.
+    for (
+      let i = 0;
+      i < images.length;
+      i++
+    ) {
+      const image = images[i];
+
+      console.log(
+        `🔍 Scanning image ${i + 1}/${images.length}`
+      );
+
+      const result =
+        await scanProductImage(
+          image.url
+        );
+
+      scanResults.push({
+        filename:
+          image.name ||
+          `Image ${i + 1}`,
+
+        ...result,
+      });
+    }
+
+    const failedTT =
+      scanResults.filter(
+        (item) =>
+          !normalizeTTCode(
+            item.ttCode
+          )
+      );
+
+    // Never calculate partial order when an image TT is missing.
+    if (failedTT.length) {
+      console.log(
+        `⚠️ TT OCR failed for ${failedTT.length}/${images.length} image(s)`
+      );
+
+      await message.reply(
+        [
+          "⚠️ **TT Code Scan Failed**",
+          "",
+          `Images: ${images.length}`,
+          `TT Codes Detected: ${
+            images.length -
+            failedTT.length
+          }`,
+          `Failed: ${failedTT.length}`,
+          "",
+          "Please check the product image(s) manually.",
+        ].join("\n")
+      );
+
+      return;
+    }
+
+    // One lookup/result per image.
+    // Same TT is intentionally NOT removed.
+    const productResults = [];
+    const missingProducts = [];
+
+    for (
+      let i = 0;
+      i < scanResults.length;
+      i++
+    ) {
+      const code =
+        normalizeTTCode(
+          scanResults[i].ttCode
+        );
+
+      console.log(
+        `🔎 Product ${i + 1}/${scanResults.length}: looking up ${code}...`
+      );
+
+      const match =
+        await findPriceForTTCode(
+          code
+        );
+
+      if (!match) {
+        missingProducts.push({
+          imageNumber: i + 1,
+          code,
+        });
+
+        continue;
+      }
+
+      // Push once PER IMAGE.
+      // Example:
+      // TT12896 image 1 -> 750
+      // TT12896 image 2 -> 750
+      // TT12896 image 3 -> 750
+      productResults.push({
+        imageNumber: i + 1,
+        code,
+        price: match.price,
+      });
+    }
+
+    if (missingProducts.length) {
+      console.log(
+        "⚠️ Price content not found:",
+        missingProducts
+      );
+
+      await message.reply(
+        [
+          "⚠️ **Price Content Not Found**",
+          "",
+          `Failed Products: ${missingProducts.length}`,
+          `Content Channel: <#${CONTENT_CHANNEL_ID}>`,
+          "",
+          "Please check the product content manually.",
+        ].join("\n")
+      );
+
+      return;
+    }
+
+    const prices =
+      productResults.map(
+        (item) => item.price
+      );
+
+    const productTotal =
+      prices.reduce(
+        (sum, price) =>
+          sum + price,
+        0
+      );
+
+    // DC is read from the SAME order/image message.
+    // Accepts DC / dc / Dc / dC.
+    // Missing DC defaults to 0.
+    const dc =
+      extractDeliveryCharge(
+        message.content
+      );
+
+    const cod =
+      productTotal + dc;
+
+    // User requested ONLY Price list + COD.
+    const response = [
+      `Price: ${prices.join(" + ")}`,
+      `COD: ${cod}`,
+    ];
+
+    await message.reply(
+      response.join("\n")
+    );
+
+    console.log("");
+    console.log(
+      "✅ AUTO PRICE + COD SUCCESS"
+    );
+    console.log(
+      "💰 Prices:",
+      prices
+    );
+    console.log(
+      "🚚 DC:",
+      dc
+    );
+    console.log(
+      "💵 Product Total:",
+      productTotal
+    );
+    console.log(
+      "💳 COD:",
+      cod
+    );
+
+  } catch (error) {
+    console.error(
+      "❌ Image/content price scanner:",
+      error
+    );
+
+    try {
+      await message.reply(
+        "⚠️ Automatic price/COD calculation failed. Please check this order manually."
+      );
+    } catch {
+      // Ignore Discord reply failure.
+    }
+
+  } finally {
+    processingImageMessages.delete(
+      message.id
+    );
+  }
+}
+
+
+// =====================================================
 // START ORDER COUNTER
 // =====================================================
 
@@ -1360,6 +1829,29 @@ async function startOrderCounter() {
           .MessageContent,
       ],
     });
+
+
+  // ===================================================
+  // IMAGE PRICE LISTENER
+  //
+  // Added independently from existing shift logic.
+  // ===================================================
+
+  discordClient.on(
+    "messageCreate",
+    async (message) => {
+      try {
+        await handleOrderImages(
+          message
+        );
+      } catch (error) {
+        console.error(
+          "❌ messageCreate OCR error:",
+          error.message
+        );
+      }
+    }
+  );
 
 
   discordClient.once(
