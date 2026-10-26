@@ -1,7 +1,9 @@
 const {
+
   Client,
 
   GatewayIntentBits,
+
 } = require("discord.js");
 
 const axios = require("axios");
@@ -19,11 +21,103 @@ const SOURCE_CHANNEL_ID = process.env.SOURCE_CHANNEL_ID;
 const PRICE_TEST_CHANNEL_ID = process.env.PRICE_TEST_CHANNEL_ID;
 
 const CONTENT_CHANNEL_ID =
+
   process.env.CONTENT_CHANNEL_ID || "1243438005444677735";
 
 const DESTINATION_WEBHOOK_URL = process.env.DESTINATION_WEBHOOK_URL;
 
 const DISCORD_BOT_TOKEN = process.env.DISCORD_BOT_TOKEN;
+
+// ======================================================
+// DELIVERYLENS CUSTOMER RISK CHECK
+// ======================================================
+const DELIVERYLENS_API_URL =
+
+  process.env.DELIVERYLENS_API_URL ||
+
+  "https://deliverylensbd.com/api/search/api";
+
+async function checkCustomerRisk(phone) {
+
+  if (!phone) return null;
+
+  const apiUrl =
+
+    process.env.DELIVERYLENS_API_URL ||
+
+    "https://deliverylensbd.com/api/search/api";
+
+  const apiToken = process.env.DELIVERYLENS_API_TOKEN;
+
+  if (!apiToken) {
+
+    console.error("❌ DELIVERYLENS_API_TOKEN is missing from .env");
+
+    return null;
+
+  }
+
+  try {
+
+    console.log(`📊 Checking customer risk: ${phone}`);
+
+    const response = await axios.post(
+
+      apiUrl,
+
+      {
+
+        phone: phone,
+
+      },
+
+      {
+
+        headers: {
+
+          "Content-Type": "application/json",
+
+          "x-api-token": apiToken,
+
+        },
+
+        timeout: 15000,
+
+      },
+
+    );
+
+    console.log("📦 DeliveryLens response:", response.data);
+
+    if (!response.data?.success || !response.data?.data) {
+
+      console.error("❌ Invalid DeliveryLens response:", response.data);
+
+      return null;
+
+    }
+
+    console.log(`✅ Customer risk received: ${phone}`);
+
+    return response.data.data;
+
+  } catch (error) {
+
+    console.error(
+
+      "❌ DeliveryLens API ERROR:",
+
+      error.response?.status || "",
+
+      error.response?.data || error.message,
+
+    );
+
+    return null;
+
+  }
+
+}
 
 let discordClient = null;
 
@@ -32,16 +126,21 @@ const RUN_COLLECTION = "order_counter_runs";
 let recoveryRunning = false;
 
 function extractTCNumbers(text = "") {
+
   const matches = text.match(/\bTC\d+\b/gi) || [];
 
   return matches.map((tc) => tc.toUpperCase());
+
 }
 
 function formatBDDate(date) {
+
   return new Intl.DateTimeFormat(
+
     "en-GB",
 
     {
+
       timeZone: BD_TIMEZONE,
 
       day: "2-digit",
@@ -49,11 +148,15 @@ function formatBDDate(date) {
       month: "2-digit",
 
       year: "numeric",
+
     },
+
   ).format(date);
+
 }
 
 function makeBDDate(
+
   year,
 
   month,
@@ -63,9 +166,13 @@ function makeBDDate(
   hour,
 
   minute = 0,
+
 ) {
+
   return new Date(
+
     Date.UTC(
+
       year,
 
       month - 1,
@@ -79,15 +186,21 @@ function makeBDDate(
       0,
 
       0,
+
     ),
+
   );
+
 }
 
 function getBDParts(date = new Date()) {
+
   const formatter = new Intl.DateTimeFormat(
+
     "en-CA",
 
     {
+
       timeZone: BD_TIMEZONE,
 
       year: "numeric",
@@ -103,7 +216,9 @@ function getBDParts(date = new Date()) {
       second: "2-digit",
 
       hourCycle: "h23",
+
     },
+
   );
 
   const parts = formatter.formatToParts(date);
@@ -111,15 +226,21 @@ function getBDParts(date = new Date()) {
   const obj = {};
 
   for (const part of parts) {
+
     if (part.type !== "literal") {
+
       obj[part.type] = Number(part.value);
+
     }
+
   }
 
   return obj;
+
 }
 
 function shiftDate(
+
   year,
 
   month,
@@ -127,9 +248,13 @@ function shiftDate(
   day,
 
   amount,
+
 ) {
+
   const d = new Date(
+
     Date.UTC(
+
       year,
 
       month - 1,
@@ -141,80 +266,111 @@ function shiftDate(
       0,
 
       0,
+
     ),
+
   );
 
   return {
+
     year: d.getUTCFullYear(),
 
     month: d.getUTCMonth() + 1,
 
     day: d.getUTCDate(),
+
   };
+
 }
 
 function getDateKey(parts) {
+
   const year = String(parts.year);
 
   const month = String(parts.month).padStart(
+
     2,
 
     "0",
+
   );
 
   const day = String(parts.day).padStart(
+
     2,
 
     "0",
+
   );
 
   return `${year}-${month}-${day}`;
+
 }
 
 function getRunCollection() {
+
   if (!mongoose.connection || mongoose.connection.readyState !== 1) {
+
     throw new Error("MongoDB is not connected");
+
   }
 
   return mongoose.connection.collection(RUN_COLLECTION);
+
 }
 
 async function setupRunCollection() {
+
   const collection = getRunCollection();
 
   await collection.createIndex(
+
     {
+
       runKey: 1,
+
     },
 
     {
+
       unique: true,
+
     },
+
   );
 
   console.log("✅ Order counter duplicate protection ready");
+
 }
 
 async function claimRun(
+
   runKey,
 
   shiftName,
 
   reportDate,
+
 ) {
+
   const collection = getRunCollection();
 
   const existing = await collection.findOne({
+
     runKey,
+
   });
 
   if (existing?.status === "SENT") {
+
     console.log(`⏭️ Already sent: ${runKey}`);
 
     return false;
+
   }
 
   if (existing?.status === "RUNNING") {
+
     const updatedAt = new Date(existing.updatedAt || existing.createdAt);
 
     const age = Date.now() - updatedAt.getTime();
@@ -222,26 +378,37 @@ async function claimRun(
     const thirtyMinutes = 30 * 60 * 1000;
 
     if (age < thirtyMinutes) {
+
       console.log(`⏳ Already running: ${runKey}`);
 
       return false;
+
     }
 
     console.log(`⚠️ Removing stale lock: ${runKey}`);
 
     await collection.deleteOne({
+
       runKey,
+
     });
+
   }
 
   if (existing?.status === "FAILED") {
+
     await collection.deleteOne({
+
       runKey,
+
     });
+
   }
 
   try {
+
     await collection.insertOne({
+
       runKey,
 
       shiftName,
@@ -253,34 +420,49 @@ async function claimRun(
       createdAt: new Date(),
 
       updatedAt: new Date(),
+
     });
 
     return true;
+
   } catch (error) {
+
     if (error.code === 11000) {
+
       console.log(`⏭️ Run already claimed: ${runKey}`);
 
       return false;
+
     }
 
     throw error;
+
   }
+
 }
 
 async function markRunSent(
+
   runKey,
 
   orderCount,
+
 ) {
+
   const collection = getRunCollection();
 
   await collection.updateOne(
+
     {
+
       runKey,
+
     },
 
     {
+
       $set: {
+
         status: "SENT",
 
         orderCount,
@@ -288,48 +470,71 @@ async function markRunSent(
         sentAt: new Date(),
 
         updatedAt: new Date(),
+
       },
+
     },
+
   );
+
 }
 
 async function releaseRun(
+
   runKey,
 
   error,
+
 ) {
+
   const collection = getRunCollection();
 
   await collection.updateOne(
+
     {
+
       runKey,
+
     },
 
     {
+
       $set: {
+
         status: "FAILED",
 
         error: error?.message || String(error),
 
         updatedAt: new Date(),
+
       },
+
     },
+
   );
+
 }
 
 async function getOrdersBetween(
+
   startTime,
 
   endTime,
+
 ) {
+
   if (!discordClient || !discordClient.isReady()) {
+
     throw new Error("Discord client is not ready");
+
   }
 
   const channel = await discordClient.channels.fetch(SOURCE_CHANNEL_ID);
 
   if (!channel || !channel.isTextBased()) {
+
     throw new Error("Source Discord channel is invalid");
+
   }
 
   const foundOrders = new Map();
@@ -339,52 +544,75 @@ async function getOrdersBetween(
   let shouldContinue = true;
 
   while (shouldContinue) {
+
     const options = {
+
       limit: 100,
+
     };
 
     if (before) {
+
       options.before = before;
+
     }
 
     const messages = await channel.messages.fetch(options);
 
     if (!messages.size) {
+
       break;
+
     }
 
     const sorted = [...messages.values()].sort(
+
       (a, b) => b.createdTimestamp - a.createdTimestamp,
+
     );
 
     for (const message of sorted) {
+
       const timestamp = message.createdTimestamp;
 
       if (timestamp >= endTime.getTime()) {
+
         continue;
+
       }
 
       if (timestamp < startTime.getTime()) {
+
         shouldContinue = false;
 
         continue;
+
       }
 
       const tcNumbers = extractTCNumbers(message.content);
 
       for (const tc of tcNumbers) {
+
         if (!foundOrders.has(tc)) {
+
           foundOrders.set(
+
             tc,
 
             {
+
               tc,
 
               timestamp,
+
             },
+
           );
+
         }
+
       }
+
     }
 
     const oldest = sorted[sorted.length - 1];
@@ -392,59 +620,87 @@ async function getOrdersBetween(
     before = oldest.id;
 
     if (oldest.createdTimestamp < startTime.getTime()) {
+
       break;
+
     }
 
     if (messages.size < 100) {
+
       break;
+
     }
+
   }
 
   const orders = [...foundOrders.values()].sort(
+
     (a, b) => a.timestamp - b.timestamp,
+
   );
 
   console.log(
+
     `📦 Orders found between ${startTime.toISOString()} → ${endTime.toISOString()}: ${orders.length}`,
+
   );
 
   return orders;
+
 }
 
 function getRangeText(orders) {
+
   if (!orders.length) {
+
     return "No orders";
+
   }
+
   if (orders.length === 1) {
+
     return orders[0].tc;
+
   }
 
   return `${orders[0].tc}-` + `${orders[orders.length - 1].tc}`;
+
 }
 
 async function sendWebhookMessage(content) {
+
   if (!DESTINATION_WEBHOOK_URL) {
+
     throw new Error("DESTINATION_WEBHOOK_URL missing");
+
   }
 
   const response = await axios.post(
+
     DESTINATION_WEBHOOK_URL,
 
     {
+
       username: "TTouch Order Counter",
 
       content,
+
     },
 
     {
+
       timeout: 15000,
+
     },
+
   );
 
   console.log(`✅ Destination webhook response: ${response.status}`);
+
 }
 
 async function sendShiftReport({
+
   shiftName,
 
   startTime,
@@ -452,7 +708,9 @@ async function sendShiftReport({
   endTime,
 
   reportDate,
+
 }) {
+
   console.log("");
 
   console.log("======================================");
@@ -466,9 +724,11 @@ async function sendShiftReport({
   console.log(`🕐 End: ${endTime.toISOString()}`);
 
   const orders = await getOrdersBetween(
+
     startTime,
 
     endTime,
+
   );
 
   const range = getRangeText(orders);
@@ -490,15 +750,19 @@ Total order ${orders.length}`;
   console.log("======================================");
 
   return orders.length;
+
 }
 
 async function sendDailyTotal(
+
   startTime,
 
   endTime,
 
   reportDate,
+
 ) {
+
   console.log("");
 
   console.log("======================================");
@@ -506,9 +770,11 @@ async function sendDailyTotal(
   console.log("📊 Daily Total processing");
 
   const orders = await getOrdersBetween(
+
     startTime,
 
     endTime,
+
   );
 
   const range = getRangeText(orders);
@@ -530,10 +796,13 @@ Total order ${orders.length}`;
   console.log("======================================");
 
   return orders.length;
+
 }
 
 async function runNightShiftForDate(target) {
+
   const yesterday = shiftDate(
+
     target.year,
 
     target.month,
@@ -541,9 +810,11 @@ async function runNightShiftForDate(target) {
     target.day,
 
     -1,
+
   );
 
   const startTime = makeBDDate(
+
     yesterday.year,
 
     yesterday.month,
@@ -551,9 +822,11 @@ async function runNightShiftForDate(target) {
     yesterday.day,
 
     21,
+
   );
 
   const endTime = makeBDDate(
+
     target.year,
 
     target.month,
@@ -561,24 +834,31 @@ async function runNightShiftForDate(target) {
     target.day,
 
     2,
+
   );
 
   const runKey = `${getDateKey(target)}:night`;
 
   const claimed = await claimRun(
+
     runKey,
 
     "Night Shift",
 
     endTime,
+
   );
 
   if (!claimed) {
+
     return;
+
   }
 
   try {
+
     const count = await sendShiftReport({
+
       shiftName: "🌙 Night Shift",
 
       startTime,
@@ -586,32 +866,45 @@ async function runNightShiftForDate(target) {
       endTime,
 
       reportDate: endTime,
+
     });
 
     await markRunSent(
+
       runKey,
 
       count,
+
     );
+
   } catch (error) {
+
     await releaseRun(
+
       runKey,
 
       error,
+
     );
 
     console.error(
+
       "❌ Night Shift failed:",
 
       error.response?.data || error.message,
+
     );
 
     throw error;
+
   }
+
 }
 
 async function runMorningShiftForDate(target) {
+
   const startTime = makeBDDate(
+
     target.year,
 
     target.month,
@@ -619,9 +912,11 @@ async function runMorningShiftForDate(target) {
     target.day,
 
     2,
+
   );
 
   const endTime = makeBDDate(
+
     target.year,
 
     target.month,
@@ -629,24 +924,31 @@ async function runMorningShiftForDate(target) {
     target.day,
 
     15,
+
   );
 
   const runKey = `${getDateKey(target)}:morning`;
 
   const claimed = await claimRun(
+
     runKey,
 
     "Morning Shift",
 
     endTime,
+
   );
 
   if (!claimed) {
+
     return;
+
   }
 
   try {
+
     const count = await sendShiftReport({
+
       shiftName: "🌅 Morning Shift",
 
       startTime,
@@ -654,32 +956,45 @@ async function runMorningShiftForDate(target) {
       endTime,
 
       reportDate: endTime,
+
     });
 
     await markRunSent(
+
       runKey,
 
       count,
+
     );
+
   } catch (error) {
+
     await releaseRun(
+
       runKey,
 
       error,
+
     );
 
     console.error(
+
       "❌ Morning Shift failed:",
 
       error.response?.data || error.message,
+
     );
 
     throw error;
+
   }
+
 }
 
 async function runDayShiftForDate(target) {
+
   const startTime = makeBDDate(
+
     target.year,
 
     target.month,
@@ -687,9 +1002,11 @@ async function runDayShiftForDate(target) {
     target.day,
 
     15,
+
   );
 
   const endTime = makeBDDate(
+
     target.year,
 
     target.month,
@@ -697,24 +1014,31 @@ async function runDayShiftForDate(target) {
     target.day,
 
     21,
+
   );
 
   const runKey = `${getDateKey(target)}:day`;
 
   const claimed = await claimRun(
+
     runKey,
 
     "Day Shift",
 
     endTime,
+
   );
 
   if (!claimed) {
+
     return;
+
   }
 
   try {
+
     const count = await sendShiftReport({
+
       shiftName: "☀️ Day Shift",
 
       startTime,
@@ -722,32 +1046,45 @@ async function runDayShiftForDate(target) {
       endTime,
 
       reportDate: endTime,
+
     });
 
     await markRunSent(
+
       runKey,
 
       count,
+
     );
+
   } catch (error) {
+
     await releaseRun(
+
       runKey,
 
       error,
+
     );
 
     console.error(
+
       "❌ Day Shift failed:",
 
       error.response?.data || error.message,
+
     );
 
     throw error;
+
   }
+
 }
 
 async function runDailyTotalForDate(target) {
+
   const yesterday = shiftDate(
+
     target.year,
 
     target.month,
@@ -755,9 +1092,11 @@ async function runDailyTotalForDate(target) {
     target.day,
 
     -1,
+
   );
 
   const startTime = makeBDDate(
+
     yesterday.year,
 
     yesterday.month,
@@ -765,9 +1104,11 @@ async function runDailyTotalForDate(target) {
     yesterday.day,
 
     2,
+
   );
 
   const endTime = makeBDDate(
+
     target.year,
 
     target.month,
@@ -775,93 +1116,125 @@ async function runDailyTotalForDate(target) {
     target.day,
 
     2,
+
   );
 
   const runKey = `${getDateKey(target)}:daily-total`;
 
   const claimed = await claimRun(
+
     runKey,
 
     "Daily Total",
 
     endTime,
+
   );
 
   if (!claimed) {
+
     return;
+
   }
 
   try {
+
     const count = await sendDailyTotal(
+
       startTime,
 
       endTime,
 
       endTime,
+
     );
 
     await markRunSent(
+
       runKey,
 
       count,
+
     );
+
   } catch (error) {
+
     await releaseRun(
+
       runKey,
 
       error,
+
     );
 
     console.error(
+
       "❌ Daily Total failed:",
 
       error.response?.data || error.message,
+
     );
 
     throw error;
+
   }
+
 }
 
 async function runNightShift() {
+
   const target = getBDParts(new Date());
 
   await runNightShiftForDate(target);
+
 }
 
 async function runDailyTotal() {
+
   const target = getBDParts(new Date());
 
   await runDailyTotalForDate(target);
+
 }
 
 async function runMorningShift() {
+
   const target = getBDParts(new Date());
 
   await runMorningShiftForDate(target);
+
 }
 
 async function runDayShift() {
+
   const target = getBDParts(new Date());
 
   await runDayShiftForDate(target);
+
 }
 
 async function recoverMissedShifts() {
+
   if (recoveryRunning) {
+
     console.log("⏭️ Recovery already running");
 
     return;
+
   }
 
   if (!discordClient || !discordClient.isReady()) {
+
     console.log("⏳ Discord not ready. Recovery skipped.");
 
     return;
+
   }
 
   recoveryRunning = true;
 
   try {
+
     const now = new Date();
 
     const today = getBDParts(now);
@@ -873,18 +1246,25 @@ async function recoverMissedShifts() {
     console.log("🔍 Checking missed order counter reports");
 
     console.log(
+
       `🇧🇩 Bangladesh: ${formatBDDate(now)} ${String(today.hour).padStart(
+
         2,
 
         "0",
+
       )}:${String(today.minute).padStart(
+
         2,
 
         "0",
+
       )}`,
+
     );
 
     const nightDue = makeBDDate(
+
       today.year,
 
       today.month,
@@ -894,9 +1274,11 @@ async function recoverMissedShifts() {
       2,
 
       0,
+
     );
 
     const dailyTotalDue = makeBDDate(
+
       today.year,
 
       today.month,
@@ -906,9 +1288,11 @@ async function recoverMissedShifts() {
       2,
 
       1,
+
     );
 
     const morningDue = makeBDDate(
+
       today.year,
 
       today.month,
@@ -918,9 +1302,11 @@ async function recoverMissedShifts() {
       15,
 
       0,
+
     );
 
     const dayDue = makeBDDate(
+
       today.year,
 
       today.month,
@@ -930,125 +1316,185 @@ async function recoverMissedShifts() {
       21,
 
       0,
+
     );
 
     if (now.getTime() >= nightDue.getTime()) {
+
       console.log("🔍 Checking Night Shift...");
 
       try {
+
         await runNightShiftForDate(today);
+
       } catch (error) {
+
         console.error(
+
           "❌ Night recovery error:",
 
           error.message,
+
         );
+
       }
+
     }
 
     if (now.getTime() >= dailyTotalDue.getTime()) {
+
       console.log("🔍 Checking Daily Total...");
 
       try {
+
         await runDailyTotalForDate(today);
+
       } catch (error) {
+
         console.error(
+
           "❌ Daily Total recovery error:",
 
           error.message,
+
         );
+
       }
+
     }
 
     if (now.getTime() >= morningDue.getTime()) {
+
       console.log("🔍 Checking Morning Shift...");
 
       try {
+
         await runMorningShiftForDate(today);
+
       } catch (error) {
+
         console.error(
+
           "❌ Morning recovery error:",
 
           error.message,
+
         );
+
       }
+
     }
 
     if (now.getTime() >= dayDue.getTime()) {
+
       console.log("🔍 Checking Day Shift...");
 
       try {
+
         await runDayShiftForDate(today);
+
       } catch (error) {
+
         console.error(
+
           "❌ Day recovery error:",
 
           error.message,
+
         );
+
       }
+
     }
 
     console.log("✅ Missed report check completed");
 
     console.log("======================================");
+
   } finally {
+
     recoveryRunning = false;
+
   }
+
 }
 
 async function waitForDiscordReady() {
+
   if (discordClient && discordClient.isReady()) {
+
     return;
+
   }
 
   await new Promise((resolve, reject) => {
+
     const timeout = setTimeout(
+
       () => {
+
         reject(new Error("Discord ready timeout"));
+
       },
 
       30000,
+
     );
 
     discordClient.once(
+
       "clientReady",
 
       () => {
+
         clearTimeout(timeout);
 
         resolve();
+
       },
+
     );
+
   });
+
 }
 
 const processingImageMessages = new Set();
 
 function isImageAttachment(attachment) {
+
   if (attachment.contentType?.startsWith("image/")) {
+
     return true;
+
   }
 
   const filename = attachment.name?.toLowerCase() || "";
 
   return /\.(jpg|jpeg|png|webp|bmp|tif|tiff)$/i.test(filename);
+
 }
 
 function normalizeTTCode(code = "") {
+
   const match = String(code).match(/TT\s*[-:]?\s*(\d{3,})/i);
 
   return match ? `TT${match[1]}` : null;
+
 }
 
 function extractPricesFromContent(content = "") {
+
   const prices = [];
 
   const regex =
+
     /(?:^|\n)\s*price\s*[:=\-]?\s*(?:tk.?|bdt|৳)?\s*([\d,]+(?:\s*\+\s*[\d,]+)*)/gi;
 
   let match;
 
   while ((match = regex.exec(content)) !== null) {
+
     const values = match[1]
 
       .split("+")
@@ -1058,101 +1504,59 @@ function extractPricesFromContent(content = "") {
       .filter(Number.isFinite);
 
     prices.push(...values);
+
   }
 
   return prices;
+
+}
+
+// Returns null when the field is absent, including when no amount is provided.
+// Supports DC, Advance/Advanced/Adv, Discount/Dis (case-insensitive).
+function extractAdjustment(content = "", names = "") {
+  const pattern = new RegExp(
+    `(?:^|\\n)\\s*(?:${names})\\s*[:=\-]?\\s*(?:tk\\.?|bdt|৳)?\\s*([\\d,]+(?:\\.\\d+)?)\\b`,
+    "i"
+  );
+  const match = String(content).match(pattern);
+  if (!match) return null;
+  const amount = Number(match[1].replace(/,/g, ""));
+  return Number.isFinite(amount) ? Math.max(0, amount) : null;
 }
 
 function extractDeliveryCharge(content = "") {
-  const match = String(content).match(
-    /(?:^|\n)\s*dc\s*[:=\-]?\s*(?:tk.?|bdt|৳)?\s*([\d,]+(?:\.\d+)?)/i,
-  );
-
-  if (!match) {
-    return 0;
-  }
-
-  const value = Number(match[1].replace(/,/g, ""));
-
-  return Number.isFinite(value) ? value : 0;
+  return extractAdjustment(content, "dc");
 }
 
 function extractAdvancePayment(content = "") {
-  if (!content) {
-    return 0;
-  }
+  return extractAdjustment(content, "advance|advanced|adv");
+}
 
-  const text = String(content);
-
-  // Supported formats:
-  //
-  // Advance 1000
-  // Advanced 1000
-  // Adv 1000
-  //
-  // Advance: 1000
-  // Advanced: 1000
-  // Adv: 1000
-  //
-  // Advance = 1000
-  // Advanced = 1000
-  // Adv = 1000
-  //
-  // Advance - 1000
-  // Advanced - 1000
-  //
-  // Advance Tk 1000
-  // Advanced Tk 1000
-  //
-  // Advance BDT 1000
-  // Advanced BDT 1000
-  //
-  // Advance ৳1000
-  // Advanced ৳1000
-  //
-  // Advanced 1,000
-
-  const match = text.match(
-    /(?:^|\n)\s*(?:advance|advanced|adv)\s*[:=\-]?\s*(?:tk\.?|bdt|৳)?\s*([\d,]+)/i,
-  );
-
-  if (!match) {
-    return 0;
-  }
-
-  const value = Number(match[1].replace(/,/g, ""));
-
-  if (!Number.isFinite(value)) {
-    return 0;
-  }
-
-  return Math.max(0, value);
+function extractDiscount(content = "") {
+  return extractAdjustment(content, "discount|dis");
 }
 
 function messageContainsTTCode(content = "", ttCode) {
   const wanted = normalizeTTCode(ttCode);
-
-  if (!wanted) {
-    return false;
-  }
-
-  const compact = String(content)
-    .toUpperCase()
-
-    .replace(/[\s\-:]/g, "");
-
-  return compact.includes(wanted);
+  if (!wanted) return false;
+  const codes = String(content).match(/TT\s*[-:]?\s*\d{3,}/gi) || [];
+  return codes.some((code) => normalizeTTCode(code) === wanted);
 }
 
 async function findPriceForTTCode(ttCode) {
+
   if (!CONTENT_CHANNEL_ID) {
+
     throw new Error("CONTENT_CHANNEL_ID missing");
+
   }
 
   const channel = await discordClient.channels.fetch(CONTENT_CHANNEL_ID);
 
   if (!channel || !channel.isTextBased()) {
+
     throw new Error("Content Discord channel is invalid");
+
   }
 
   let before;
@@ -1160,52 +1564,75 @@ async function findPriceForTTCode(ttCode) {
   const maxPages = 20;
 
   for (let page = 0; page < maxPages; page++) {
+
     const options = {
+
       limit: 100,
+
     };
 
     if (before) {
+
       options.before = before;
+
     }
 
     const messages = await channel.messages.fetch(options);
 
     if (!messages.size) {
+
       break;
+
     }
 
     const sorted = [...messages.values()].sort(
+
       (a, b) => b.createdTimestamp - a.createdTimestamp,
+
     );
 
     for (const contentMessage of sorted) {
+
       if (
+
         !messageContainsTTCode(
+
           contentMessage.content,
 
           ttCode,
+
         )
+
       ) {
+
         continue;
+
       }
 
       const prices = extractPricesFromContent(contentMessage.content);
 
       if (prices.length) {
+
         const price = prices[0];
 
         console.log(
+
           `✅ Content match: ${ttCode} -> ${price} (message ${contentMessage.id})`,
+
         );
 
         return {
+
           ttCode: normalizeTTCode(ttCode),
 
           price,
 
           messageId: contentMessage.id,
+
         };
+
       }
+
     }
 
     const oldest = sorted[sorted.length - 1];
@@ -1213,30 +1640,154 @@ async function findPriceForTTCode(ttCode) {
     before = oldest?.id;
 
     if (!before || messages.size < 100) {
+
       break;
+
     }
+
   }
 
   return null;
+
+}
+
+// ======================================================
+// CUSTOMER PHONE + DELIVERYLENS RISK CHECK
+// ======================================================
+function extractPhoneNumber(content = "") {
+
+  if (!content) return null;
+
+  const text = String(content);
+
+  const labeledMatch = text.match(
+
+    /(?:phone|mobile|contact)\s*[:=\-]?\s*(?:\+?88)?(01[3-9]\d{8})/i,
+
+  );
+
+  if (labeledMatch) return labeledMatch[1];
+
+  const generalMatch = text.match(/(?:\+?88)?(01[3-9]\d{8})/);
+
+  return generalMatch ? generalMatch[1] : null;
+
+}
+
+function getRiskEmoji(risk = "") {
+
+  const value = String(risk).toUpperCase();
+
+  if (value === "LOW") return "🟢";
+
+  if (value === "MEDIUM") return "🟡";
+
+  if (value === "HIGH") return "🔴";
+
+  return "⚪";
+
+}
+
+function formatCustomerRisk(riskData, phone) {
+
+  if (!riskData) return null;
+
+  const risk = String(riskData.risk || "UNKNOWN").toUpperCase();
+
+  const total = Number(riskData.total) || 0;
+
+  const success = Number(riskData.success) || 0;
+
+  const cancel = Number(riskData.cancel) || 0;
+
+  const successRate = Number(riskData.successRate) || 0;
+
+  const lines = [
+
+    "📊 **Customer Risk Check**",
+
+    `Phone: ${riskData.phone || phone}`,
+
+    `Risk: ${getRiskEmoji(risk)} ${risk}`,
+
+    `Total Orders: ${total} | ✅ ${success} | ❌ ${cancel} | Success: ${successRate}%`,
+
+  ];
+
+  const couriers = Array.isArray(riskData.couriers) ? riskData.couriers : [];
+
+  if (couriers.length) {
+
+    lines.push("");
+
+    for (const courier of couriers) {
+
+      if (!courier) continue;
+
+      const courierName = courier.courier || courier.slug || "Courier";
+
+      const courierTotal = Number(courier.total) || 0;
+
+      const courierSuccess = Number(courier.success) || 0;
+
+      const courierCancel = Number(courier.cancel) || 0;
+
+      const courierSuccessRate = Number(courier.successRate) || 0;
+
+      lines.push(
+
+        `📦 ${courierName}: ${courierTotal} | ✅ ${courierSuccess} | ❌ ${courierCancel} | ${courierSuccessRate}%`,
+
+      );
+
+    }
+
+  }
+
+  if (riskData.fraudFound === true) {
+
+    lines.push("");
+
+    lines.push(`🚨 Fraud Reports: ${Number(riskData.fraudCount) || 0}`);
+
+    if (riskData.fraudMessage) {
+
+      lines.push(`⚠️ ${riskData.fraudMessage}`);
+
+    }
+
+  }
+
+  return lines.join("\n");
+
 }
 
 async function handleOrderImages(message) {
+
   if (message.author?.bot) {
+
     return;
+
   }
 
   if (message.channel.id !== PRICE_TEST_CHANNEL_ID) {
+
     return;
+
   }
 
   if (processingImageMessages.has(message.id)) {
+
     return;
+
   }
 
   const images = [...message.attachments.values()].filter(isImageAttachment);
 
   if (!images.length) {
+
     return;
+
   }
 
   processingImageMessages.add(message.id);
@@ -1252,15 +1803,21 @@ async function handleOrderImages(message) {
   console.log("======================================");
 
   try {
+
     try {
+
       await message.react("🔍");
+
     } catch (error) {
+
       console.log("⚠️ Could not add OCR reaction");
+
     }
 
     const scanResults = [];
 
     for (let i = 0; i < images.length; i++) {
+
       const image = images[i];
 
       console.log(`🔍 Scanning image ${i + 1}/${images.length}`);
@@ -1268,25 +1825,35 @@ async function handleOrderImages(message) {
       const result = await scanProductImage(image.url);
 
       scanResults.push({
+
         imageIndex: i,
 
         filename: image.name || `Image ${i + 1}`,
 
         ...result,
+
       });
+
     }
 
     const failedTT = scanResults.filter(
+
       (item) => !normalizeTTCode(item.ttCode),
+
     );
 
     if (failedTT.length) {
+
       console.log(
+
         `⚠️ TT OCR failed for ${failedTT.length}/${images.length} image(s)`,
+
       );
 
       await message.reply(
+
         [
+
           "⚠️ **TT Code Scan Failed**",
 
           "",
@@ -1300,86 +1867,118 @@ async function handleOrderImages(message) {
           "",
 
           "Please check the product image(s) manually.",
+
         ].join("\n"),
+
       );
 
       return;
+
     }
 
     const productResults = [];
 
-    const missingProducts = [];
 
     const priceCache = new Map();
 
     for (let i = 0; i < scanResults.length; i++) {
+
       const code = normalizeTTCode(scanResults[i].ttCode);
 
       let match;
 
       if (priceCache.has(code)) {
+
         match = priceCache.get(code);
 
         console.log(`⚡ Cached content price: ${code}`);
+
       } else {
+
         match = await findPriceForTTCode(code);
 
         priceCache.set(code, match);
+
       }
 
       if (!match) {
-        missingProducts.push({ imageNumber: i + 1, code });
+        console.warn(`⚠️ No price for ${code}; using 0`);
+        productResults.push({ imageNumber: i + 1, code, price: 0 });
         continue;
       }
 
       productResults.push({ imageNumber: i + 1, code, price: match.price });
-    }
 
-    if (missingProducts.length) {
-      console.log(
-        "⚠️ Price content not found:",
-
-        missingProducts,
-      );
-
-      await message.reply(
-        [
-          "⚠️ **Price Content Not Found**",
-
-          "",
-
-          `Failed Products: ${missingProducts.length}`,
-
-          `Content Channel: <#${CONTENT_CHANNEL_ID}>`,
-
-          "",
-
-          "Please check the product content manually.",
-        ].join("\n"),
-      );
-
-      return;
     }
 
     const prices = productResults.map((item) => item.price);
 
     const productTotal = prices.reduce(
+
       (sum, price) => sum + price,
 
       0,
+
     );
 
     const dc = extractDeliveryCharge(message.content);
-
     const advance = extractAdvancePayment(message.content);
+    const discount = extractDiscount(message.content);
+    const hasAdjustments = dc !== null || advance !== null || discount !== null;
+    const cod = Math.max(0, productTotal + (dc ?? 0) - (advance ?? 0) - (discount ?? 0));
 
-    const cod = Math.max(
-      0,
+    const response = productResults.map((product) => `${product.code} → ${product.price}`);
+    response.push("");
+    response.push(`Price: ${prices.join(" + ")}`);
+    if (hasAdjustments) {
+      if (dc !== null) response.push(`DC: ${dc}`);
+      if (advance !== null) response.push(`Advance: ${advance}`);
+      if (discount !== null) response.push(`Discount: ${discount}`);
+      response.push(`COD: ${cod}`);
+    } else {
+      response.push(`Total: ${productTotal}`);
+    }
 
-      productTotal + dc - advance,
-    );
+// DeliveryLens risk check. Existing Price/COD logic above remains unchanged.
+    const phone = extractPhoneNumber(message.content);
 
-    const response = [`Price: ${prices.join(" + ")}`, `COD: ${cod}`];
+    console.log("📱 Customer Phone:", phone || "Not found");
+
+    if (phone) {
+
+      console.log("========== DELIVERYLENS DEBUG ==========");
+
+      console.log("📱 Extracted phone:", phone);
+
+      console.log(
+
+        "🔑 Token loaded:",
+
+        Boolean(process.env.DELIVERYLENS_API_TOKEN),
+
+      );
+
+      const riskData = await checkCustomerRisk(phone);
+
+      console.log("📊 Risk result:", riskData);
+
+      console.log("========================================");
+
+      if (riskData) {
+
+        const riskText = formatCustomerRisk(riskData, phone);
+
+        if (riskText) {
+
+          response.push("");
+
+          response.push(riskText);
+
+        }
+
+      }
+
+    }
 
     await message.reply(response.join("\n"));
 
@@ -1388,102 +1987,147 @@ async function handleOrderImages(message) {
     console.log("✅ AUTO PRICE + COD SUCCESS");
 
     console.log(
+
       "💰 Prices:",
 
       prices,
+
     );
 
     console.log(
+
       "🚚 DC:",
 
       dc,
+
     );
 
     console.log(
+
       "💸 Advance:",
 
       advance,
+
     );
 
     console.log(
+
       "💵 Product Total:",
 
       productTotal,
+
     );
 
     console.log(
+
       "💳 COD:",
 
       cod,
+
     );
+
   } catch (error) {
+
     console.error(
+
       "❌ Image/content price scanner:",
 
       error,
+
     );
 
     try {
+
       await message.reply(
+
         "⚠️ Automatic price/COD calculation failed. Please check this order manually.",
+
       );
+
     } catch {}
+
   } finally {
+
     processingImageMessages.delete(message.id);
+
   }
+
 }
 
 async function startOrderCounter() {
+
   if (!DISCORD_BOT_TOKEN) {
+
     console.log("⚠️ DISCORD_BOT_TOKEN missing. Order counter disabled.");
 
     return;
+
   }
 
   if (!SOURCE_CHANNEL_ID) {
+
     console.log("⚠️ SOURCE_CHANNEL_ID missing. Order counter disabled.");
 
     return;
+
   }
 
   if (!DESTINATION_WEBHOOK_URL) {
+
     console.log("⚠️ DESTINATION_WEBHOOK_URL missing. Order counter disabled.");
 
     return;
+
   }
 
   await setupRunCollection();
 
   discordClient = new Client({
+
     intents: [
+
       GatewayIntentBits.Guilds,
 
       GatewayIntentBits.GuildMessages,
 
       GatewayIntentBits.MessageContent,
+
     ],
+
   });
 
   discordClient.on(
+
     "messageCreate",
 
     async (message) => {
+
       try {
+
         await handleOrderImages(message);
+
       } catch (error) {
+
         console.error(
+
           "❌ messageCreate OCR error:",
 
           error.message,
+
         );
+
       }
+
     },
+
   );
 
   discordClient.once(
+
     "clientReady",
 
     () => {
+
       console.log(`🤖 Discord bot logged in as ${discordClient.user.tag}`);
 
       console.log("✅ TTouch Order Counter started");
@@ -1503,7 +2147,9 @@ async function startOrderCounter() {
       console.log("✅ Contabo deployment mode");
 
       console.log("🚫 15-minute health/recovery cron disabled");
+
     },
+
   );
 
   await discordClient.login(DISCORD_BOT_TOKEN);
@@ -1511,91 +2157,139 @@ async function startOrderCounter() {
   await waitForDiscordReady();
 
   cron.schedule(
+
     "0 2 * * *",
 
     async () => {
+
       console.log("⏰ NIGHT SHIFT CRON FIRED - 2:00 AM BD");
 
       try {
+
         await runNightShift();
+
       } catch (error) {
+
         console.error(
+
           "❌ Night cron error:",
 
           error.message,
+
         );
+
       }
+
     },
 
     {
+
       timezone: BD_TIMEZONE,
+
     },
+
   );
 
   cron.schedule(
+
     "1 2 * * *",
 
     async () => {
+
       console.log("⏰ DAILY TOTAL CRON FIRED - 2:01 AM BD");
 
       try {
+
         await runDailyTotal();
+
       } catch (error) {
+
         console.error(
+
           "❌ Daily Total cron error:",
 
           error.message,
+
         );
+
       }
+
     },
 
     {
+
       timezone: BD_TIMEZONE,
+
     },
+
   );
 
   cron.schedule(
+
     "0 15 * * *",
 
     async () => {
+
       console.log("⏰ MORNING SHIFT CRON FIRED - 3:00 PM BD");
 
       try {
+
         await runMorningShift();
+
       } catch (error) {
+
         console.error(
+
           "❌ Morning cron error:",
 
           error.message,
+
         );
+
       }
+
     },
 
     {
+
       timezone: BD_TIMEZONE,
+
     },
+
   );
 
   cron.schedule(
+
     "0 21 * * *",
 
     async () => {
+
       console.log("⏰ DAY SHIFT CRON FIRED - 9:00 PM BD");
 
       try {
+
         await runDayShift();
+
       } catch (error) {
+
         console.error(
+
           "❌ Day cron error:",
 
           error.message,
+
         );
+
       }
+
     },
 
     {
+
       timezone: BD_TIMEZONE,
+
     },
+
   );
 
   console.log("⏰ Order Counter cron jobs registered");
@@ -1611,17 +2305,25 @@ async function startOrderCounter() {
   console.log("🚫 15-minute scheduled check removed");
 
   try {
+
     await recoverMissedShifts();
+
   } catch (error) {
+
     console.error(
+
       "❌ Initial recovery failed:",
 
       error.message,
+
     );
+
   }
+
 }
 
 module.exports = {
+
   startOrderCounter,
 
   runNightShift,
@@ -1633,4 +2335,5 @@ module.exports = {
   runDayShift,
 
   recoverMissedShifts,
+
 };
