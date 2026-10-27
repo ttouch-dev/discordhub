@@ -29,13 +29,16 @@ const DESTINATION_WEBHOOK_URL = process.env.DESTINATION_WEBHOOK_URL;
 const DISCORD_BOT_TOKEN = process.env.DISCORD_BOT_TOKEN;
 
 // ======================================================
+
 // DELIVERYLENS CUSTOMER RISK CHECK
+
 // ======================================================
+
 const DELIVERYLENS_API_URL =
 
   process.env.DELIVERYLENS_API_URL ||
 
-  "https://deliverylensbd.com/api/search/api";
+  "https\://deliverylensbd.com/api/search/api";
 
 async function checkCustomerRisk(phone) {
 
@@ -45,7 +48,7 @@ async function checkCustomerRisk(phone) {
 
     process.env.DELIVERYLENS_API_URL ||
 
-    "https://deliverylensbd.com/api/search/api";
+    "https\://deliverylensbd.com/api/search/api";
 
   const apiToken = process.env.DELIVERYLENS_API_TOKEN;
 
@@ -1512,35 +1515,57 @@ function extractPricesFromContent(content = "") {
 }
 
 // Returns null when the field is absent, including when no amount is provided.
+
 // Supports DC, Advance/Advanced/Adv, Discount/Dis (case-insensitive).
+
 function extractAdjustment(content = "", names = "") {
+
   const pattern = new RegExp(
+
     `(?:^|\\n)\\s*(?:${names})\\s*[:=\-]?\\s*(?:tk\\.?|bdt|৳)?\\s*([\\d,]+(?:\\.\\d+)?)\\b`,
+
     "i"
+
   );
+
   const match = String(content).match(pattern);
+
   if (!match) return null;
+
   const amount = Number(match[1].replace(/,/g, ""));
+
   return Number.isFinite(amount) ? Math.max(0, amount) : null;
+
 }
 
 function extractDeliveryCharge(content = "") {
+
   return extractAdjustment(content, "dc");
+
 }
 
 function extractAdvancePayment(content = "") {
+
   return extractAdjustment(content, "advance|advanced|adv");
+
 }
 
 function extractDiscount(content = "") {
+
   return extractAdjustment(content, "discount|dis");
+
 }
 
 function messageContainsTTCode(content = "", ttCode) {
+
   const wanted = normalizeTTCode(ttCode);
+
   if (!wanted) return false;
+
   const codes = String(content).match(/TT\s*[-:]?\s*\d{3,}/gi) || [];
+
   return codes.some((code) => normalizeTTCode(code) === wanted);
+
 }
 
 async function findPriceForTTCode(ttCode) {
@@ -1652,8 +1677,11 @@ async function findPriceForTTCode(ttCode) {
 }
 
 // ======================================================
+
 // CUSTOMER PHONE + DELIVERYLENS RISK CHECK
+
 // ======================================================
+
 function extractPhoneNumber(content = "") {
 
   if (!content) return null;
@@ -1878,7 +1906,6 @@ async function handleOrderImages(message) {
 
     const productResults = [];
 
-
     const priceCache = new Map();
 
     for (let i = 0; i < scanResults.length; i++) {
@@ -1902,9 +1929,13 @@ async function handleOrderImages(message) {
       }
 
       if (!match) {
+
         console.warn(`⚠️ No price for ${code}; using 0`);
+
         productResults.push({ imageNumber: i + 1, code, price: 0 });
+
         continue;
+
       }
 
       productResults.push({ imageNumber: i + 1, code, price: match.price });
@@ -1922,24 +1953,36 @@ async function handleOrderImages(message) {
     );
 
     const dc = extractDeliveryCharge(message.content);
+
     const advance = extractAdvancePayment(message.content);
+
     const discount = extractDiscount(message.content);
+
     const hasAdjustments = dc !== null || advance !== null || discount !== null;
+
     const cod = Math.max(0, productTotal + (dc ?? 0) - (advance ?? 0) - (discount ?? 0));
 
-    const response = productResults.map((product) => `${product.code} → ${product.price}`);
-    response.push("");
+    const response = [];
     response.push(`Price: ${prices.join(" + ")}`);
+
     if (hasAdjustments) {
+
       if (dc !== null) response.push(`DC: ${dc}`);
+
       if (advance !== null) response.push(`Advance: ${advance}`);
+
       if (discount !== null) response.push(`Discount: ${discount}`);
+
       response.push(`COD: ${cod}`);
+
     } else {
+
       response.push(`Total: ${productTotal}`);
+
     }
 
 // DeliveryLens risk check. Existing Price/COD logic above remains unchanged.
+
     const phone = extractPhoneNumber(message.content);
 
     console.log("📱 Customer Phone:", phone || "Not found");
